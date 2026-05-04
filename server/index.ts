@@ -1,0 +1,928 @@
+import cors from "cors";
+import Database from "better-sqlite3";
+import dotenv from "dotenv";
+import express from "express";
+import multer from "multer";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+dotenv.config();
+
+type ImpactLevel = "high" | "medium" | "low";
+
+type Teacher = {
+  id: string;
+  name: string;
+};
+
+type BenefitColumn = {
+  id: string;
+  label: string;
+};
+
+type SchoolSettings = {
+  country: string;
+  ministry: string;
+  department: string;
+  schoolName: string;
+  principalName: string;
+  totalTeachers: number;
+};
+
+type TemplateAssets = {
+  backgroundUrl?: string;
+  signatureUrl?: string;
+};
+
+type TableRegionId = "summary" | "strengths" | "improvements" | "details";
+
+type TableColumnTemplate = {
+  id: string;
+  label: string;
+  widthMm?: number;
+  visible?: boolean;
+};
+
+type TableRegion = {
+  id: TableRegionId;
+  label: string;
+  leftMm: number;
+  topMm: number;
+  widthMm: number;
+  heightMm: number;
+  rowHeightMm: number;
+  headerHeightMm?: number;
+  labelWidthMm?: number;
+  fontSizePt?: number;
+  borderColor?: string;
+  backgroundColor?: string;
+  textAlign?: "right" | "center" | "left";
+  columns?: TableColumnTemplate[];
+};
+
+type SmartTemplate = {
+  id: string;
+  name: string;
+  pageWidthMm: number;
+  pageHeightMm: number;
+  assets: TemplateAssets;
+  tableRegions: Record<TableRegionId, TableRegion>;
+};
+
+type PagePrintOverride = {
+  letterheadTopMm?: number;
+  letterheadRightMm?: number;
+  letterheadWidthMm?: number;
+  principalNameLeftMm?: number;
+  principalNameTopMm?: number;
+  principalNameWidthMm?: number;
+  principalNameHeightMm?: number;
+  principalNameFontSizePt?: number;
+  signatureImageAbsLeftMm?: number;
+  signatureImageAbsTopMm?: number;
+  signatureImageAbsWidthMm?: number;
+  signatureImageAbsHeightMm?: number;
+};
+
+type TextStyleOverride = {
+  fontFamily?: string;
+  fontSizePt?: number;
+  fontWeight?: number;
+  color?: string;
+};
+
+type CheckmarkOffset = {
+  x: number;
+  y: number;
+};
+
+type PrintSettings = {
+  letterheadTopMm: number;
+  letterheadRightMm: number;
+  letterheadWidthMm: number;
+  letterheadFontSizePt: number;
+  principalNameLeftMm: number;
+  principalNameTopMm: number;
+  principalNameWidthMm: number;
+  principalNameHeightMm: number;
+  principalNameFontSizePt: number;
+  principalNameFontWeight: number;
+  signatureImageAbsLeftMm: number;
+  signatureImageAbsTopMm: number;
+  signatureImageAbsWidthMm: number;
+  signatureImageAbsHeightMm: number;
+  signatureLeftMm: number;
+  signatureBottomMm: number;
+  signatureBoxWidthMm: number;
+  signatureImageLeftMm: number;
+  signatureImageTopMm: number;
+  signatureImageWidthMm: number;
+  signatureFontSizePt: number;
+  signatureColor: string;
+  fontFamily: string;
+  fontSizePt: number;
+  textFontWeight: number;
+  textColor: string;
+  titleFontSizePt: number;
+  titleFontWeight: number;
+  titleColor: string;
+  accentColor: string;
+  pageOverrides: Record<string, PagePrintOverride>;
+  textStyleOverrides: Record<string, TextStyleOverride>;
+  checkmarkOffsets: Record<string, CheckmarkOffset>;
+};
+
+type ReportRow = {
+  teacherId: string;
+  teacherName: string;
+  lessonsCount: number;
+  contribution: string;
+  effectiveness: string;
+  benefits: Record<string, boolean>;
+  acquiredSkills: string;
+};
+
+type Profile = {
+  email: string;
+  schoolSettings: SchoolSettings;
+  teachers: Teacher[];
+  benefitColumns: BenefitColumn[];
+  visibleColumnIds: string[];
+  templateAssets: TemplateAssets;
+  smartTemplates: SmartTemplate[];
+  activeSmartTemplateId?: string;
+  printSettings: PrintSettings;
+  currentReport?: Report;
+};
+
+type Report = {
+  id: string;
+  email: string;
+  courseTitle: string;
+  level: ImpactLevel;
+  createdAt: string;
+  updatedAt: string;
+  schoolSettings: SchoolSettings;
+  templateAssets: TemplateAssets;
+  smartTemplate?: SmartTemplate;
+  printSettings: PrintSettings;
+  benefitColumns: BenefitColumn[];
+  visibleColumnIds: string[];
+  rows: ReportRow[];
+  summary: {
+    totalTeachers: number;
+    participantsCount: number;
+    attendancePercentage: number;
+    implementedLessons: number;
+    impactSummary: string;
+    contributionHighPercent: number;
+    contributionMediumPercent: number;
+    contributionLowPercent: number;
+    effectivenessHighPercent: number;
+    benefitPercentages: Record<string, number>;
+  };
+  percentageOverrides: Record<string, number>;
+  summaryNumberOverrides: Record<string, number>;
+  strengths: string[];
+  improvements: string[];
+};
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, "..");
+const dataDir = process.env.VERCEL ? path.join("/tmp", "impact-report-tool") : path.join(rootDir, "data");
+const uploadDir = path.join(dataDir, "uploads");
+const assetDir = path.join(dataDir, "assets");
+const dbPath = path.join(dataDir, "app.db");
+const port = Number(process.env.PORT || 5174);
+
+await fsp.mkdir(uploadDir, { recursive: true });
+await fsp.mkdir(assetDir, { recursive: true });
+
+const db = new Database(dbPath);
+db.pragma("journal_mode = WAL");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS profiles (
+    email TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    title TEXT NOT NULL,
+    level TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS reports_email_updated_idx
+    ON reports (email, updated_at DESC);
+`);
+
+const defaultBenefitColumns: BenefitColumn[] = [
+  { id: "subject", label: "فهم المادة الدراسية" },
+  { id: "teaching", label: "تطوير المهارات التدريسية" },
+  { id: "confidence", label: "تعزيز الثقة بالنفس" },
+  { id: "teamwork", label: "تحسين العمل الجماعي" },
+  { id: "classroom", label: "الإدارة الصفية" },
+  { id: "technology", label: "التطبيقات التقنية" },
+  { id: "motivation", label: "التعزيز والتحفيز" }
+];
+
+const defaultSchoolSettings: SchoolSettings = {
+  country: "المملكة العربية السعودية",
+  ministry: "وزارة التعليم",
+  department: "الإدارة العامة للتعليم بالمنطقة الشرقية",
+  schoolName: "الابتدائية الثالثة والعشرون الطفولة المبكرة",
+  principalName: "فاطمه القحطاني",
+  totalTeachers: 32
+};
+
+const defaultPrintSettings: PrintSettings = {
+  letterheadTopMm: 13,
+  letterheadRightMm: 18,
+  letterheadWidthMm: 62,
+  letterheadFontSizePt: 10,
+  principalNameLeftMm: 34,
+  principalNameTopMm: 257,
+  principalNameWidthMm: 74,
+  principalNameHeightMm: 7,
+  principalNameFontSizePt: 12,
+  principalNameFontWeight: 700,
+  signatureImageAbsLeftMm: 38,
+  signatureImageAbsTopMm: 262,
+  signatureImageAbsWidthMm: 38,
+  signatureImageAbsHeightMm: 15,
+  signatureLeftMm: 34,
+  signatureBottomMm: 36,
+  signatureBoxWidthMm: 74,
+  signatureImageLeftMm: 4,
+  signatureImageTopMm: 3.5,
+  signatureImageWidthMm: 38,
+  signatureFontSizePt: 12,
+  signatureColor: "#111111",
+  fontFamily: '"Sakkal Majalla", "Arial", "Tahoma", sans-serif',
+  fontSizePt: 12,
+  textFontWeight: 400,
+  textColor: "#111111",
+  titleFontSizePt: 22,
+  titleFontWeight: 800,
+  titleColor: "#285b9d",
+  accentColor: "#ff0000",
+  pageOverrides: {},
+  textStyleOverrides: {},
+  checkmarkOffsets: {}
+};
+
+function createDefaultSmartTemplate(assets: TemplateAssets = {}, name = "قالب تقرير قياس الأثر"): SmartTemplate {
+  return {
+    id: "impact-report-smart-template",
+    name,
+    pageWidthMm: 210,
+    pageHeightMm: 297,
+    assets,
+    tableRegions: {
+      summary: {
+        id: "summary",
+        label: "جدول الملخص",
+        leftMm: 11,
+        topMm: 64,
+        widthMm: 188,
+        heightMm: 85,
+        rowHeightMm: 8,
+        labelWidthMm: 70,
+        fontSizePt: 12,
+        borderColor: "#777777",
+        backgroundColor: "#ffffff",
+        textAlign: "center"
+      },
+      strengths: {
+        id: "strengths",
+        label: "جدول نقاط القوة",
+        leftMm: 11,
+        topMm: 149,
+        widthMm: 188,
+        heightMm: 60.2,
+        rowHeightMm: 5.47,
+        labelWidthMm: 70,
+        fontSizePt: 10,
+        borderColor: "#777777",
+        backgroundColor: "#f9e3d2",
+        textAlign: "center"
+      },
+      improvements: {
+        id: "improvements",
+        label: "جدول فرص التحسين",
+        leftMm: 11,
+        topMm: 209.2,
+        widthMm: 188,
+        heightMm: 43.8,
+        rowHeightMm: 5.47,
+        labelWidthMm: 70,
+        fontSizePt: 10,
+        borderColor: "#777777",
+        backgroundColor: "#d9e4f5",
+        textAlign: "center"
+      },
+      details: {
+        id: "details",
+        label: "جدول المعلمات",
+        leftMm: 8,
+        topMm: 55.9,
+        widthMm: 193.9,
+        heightMm: 184,
+        rowHeightMm: 5.82,
+        headerHeightMm: 32,
+        fontSizePt: 6.8,
+        borderColor: "#777777",
+        backgroundColor: "#ffffff",
+        textAlign: "center"
+      }
+    }
+  };
+}
+
+function emptyProfile(email: string): Profile {
+  return {
+    email,
+    schoolSettings: defaultSchoolSettings,
+    teachers: [],
+    benefitColumns: defaultBenefitColumns,
+    visibleColumnIds: defaultBenefitColumns.map((column) => column.id),
+    templateAssets: {},
+    smartTemplates: [createDefaultSmartTemplate()],
+    activeSmartTemplateId: "impact-report-smart-template",
+    printSettings: defaultPrintSettings
+  };
+}
+
+function normalizeEmail(value: unknown) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    throw new Error("بريد غير صحيح");
+  }
+  return email;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function assetUrl(filename: string) {
+  return `/assets/templates/${filename.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function runPythonImport(pdfPath: string, profileAssetDir: string): Promise<{
+  teachers: Teacher[];
+  templateAssets: TemplateAssets;
+  schoolSettings: Partial<SchoolSettings>;
+}> {
+  return new Promise((resolve, reject) => {
+    const script = path.join(rootDir, "scripts", "import_pdf.py");
+    const child = spawn("python3", [script, pdfPath, profileAssetDir], {
+      cwd: rootDir,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr || "تعذر قراءة ملف PDF"));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve(parsed);
+      } catch (error) {
+        reject(new Error(`تعذر تحليل نتيجة PDF: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    });
+  });
+}
+
+function percentage(count: number, total: number) {
+  return total ? Math.round((count / total) * 100) : 0;
+}
+
+function composeReport(input: {
+  id?: string;
+  email: string;
+  courseTitle: string;
+  level: ImpactLevel;
+  schoolSettings: SchoolSettings;
+  templateAssets: TemplateAssets;
+  smartTemplate?: SmartTemplate;
+  printSettings?: Partial<PrintSettings>;
+  benefitColumns: BenefitColumn[];
+  visibleColumnIds: string[];
+  rows: ReportRow[];
+  strengths: string[];
+  improvements: string[];
+}): Report {
+  const createdAt = nowIso();
+  const rows = input.rows;
+  const participantsCount = rows.length;
+  const totalTeachers = Math.max(input.schoolSettings.totalTeachers || participantsCount, participantsCount);
+  const implementedLessons = rows.reduce((sum, row) => sum + Math.max(0, Number(row.lessonsCount) || 0), 0);
+  const benefitPercentages: Record<string, number> = {};
+  for (const column of input.benefitColumns) {
+    benefitPercentages[column.id] = percentage(rows.filter((row) => row.benefits?.[column.id]).length, participantsCount);
+  }
+
+  return {
+    id: input.id || randomUUID(),
+    email: input.email,
+    courseTitle: input.courseTitle,
+    level: input.level,
+    createdAt,
+    updatedAt: createdAt,
+    schoolSettings: input.schoolSettings,
+    templateAssets: input.templateAssets,
+    smartTemplate: input.smartTemplate,
+    printSettings: { ...defaultPrintSettings, ...input.printSettings },
+    benefitColumns: input.benefitColumns,
+    visibleColumnIds: input.visibleColumnIds,
+    rows,
+    summary: {
+      totalTeachers,
+      participantsCount,
+      attendancePercentage: percentage(participantsCount, totalTeachers),
+      implementedLessons,
+      impactSummary:
+        input.level === "high"
+          ? "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية"
+          : input.level === "medium"
+            ? "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة"
+            : "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
+      contributionHighPercent: percentage(rows.filter((row) => row.contribution.includes("عالية")).length, participantsCount),
+      contributionMediumPercent: percentage(
+        rows.filter((row) => row.contribution.includes("متوسطة")).length,
+        participantsCount
+      ),
+      contributionLowPercent: percentage(rows.filter((row) => row.contribution.includes("منخفضة")).length, participantsCount),
+      effectivenessHighPercent: percentage(rows.filter((row) => row.effectiveness.includes("عالية")).length, participantsCount),
+      benefitPercentages
+    },
+    percentageOverrides: {},
+    summaryNumberOverrides: {},
+    strengths: input.strengths,
+    improvements: input.improvements
+  };
+}
+
+const skillPhrases = [
+  "التخطيط والتنفيذ والتقويم والتغذية الراجعة",
+  "تطبيق استراتيجيات تدريس متنوعة داخل الصف",
+  "توظيف التطبيقات التقنية بما يخدم أهداف الدرس",
+  "تحسين إدارة الصف وتنظيم العمل الجماعي",
+  "ربط الأنشطة بنواتج التعلم وأساليب التقويم",
+  "تنويع أساليب التعزيز والتحفيز للمتعلمين",
+  "رفع جودة التفاعل بين المعلمة والطلاب",
+  "بناء أنشطة صفية ولاصفية أكثر فاعلية"
+];
+
+function localGeneratedReport(input: {
+  email: string;
+  courseTitle: string;
+  level: ImpactLevel;
+  teachers: Teacher[];
+  profile: Profile;
+}) {
+  const activeSmartTemplate =
+    input.profile.smartTemplates.find((template) => template.id === input.profile.activeSmartTemplateId) ||
+    input.profile.smartTemplates[0];
+  const high = input.level === "high";
+  const medium = input.level === "medium";
+  const rows = input.teachers.map((teacher, index) => {
+    const benefits: Record<string, boolean> = {};
+    const count = high ? 4 + (index % 3) : medium ? 2 + (index % 3) : 1 + (index % 2);
+    input.profile.benefitColumns.forEach((column, columnIndex) => {
+      benefits[column.id] = ((columnIndex + index) % input.profile.benefitColumns.length) < count;
+    });
+    return {
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      lessonsCount: high ? 1 + ((index * 2) % 4) : medium ? 1 + (index % 3) : 1,
+      contribution: high
+        ? index % 13 === 0
+          ? "تساهم بدرجة متوسطة"
+          : "تساهم بدرجة عالية"
+        : medium
+          ? index % 4 === 0
+            ? "تساهم بدرجة عالية"
+            : "تساهم بدرجة متوسطة"
+          : index % 5 === 0
+            ? "تساهم بدرجة عالية"
+            : "تساهم بدرجة متوسطة",
+      effectiveness: high
+        ? "فاعلة بدرجة عالية"
+        : medium
+          ? index % 4 === 0
+            ? "فاعلة بدرجة عالية"
+            : "فاعلة بدرجة متوسطة"
+          : "فاعلة بدرجة منخفضة",
+      benefits,
+      acquiredSkills: skillPhrases[index % skillPhrases.length]
+    };
+  });
+  return composeReport({
+    email: input.email,
+    courseTitle: input.courseTitle || "الدروس التطبيقية",
+    level: input.level,
+    schoolSettings: {
+      ...input.profile.schoolSettings,
+      totalTeachers: Math.max(input.profile.schoolSettings.totalTeachers, input.teachers.length)
+    },
+    templateAssets: input.profile.templateAssets,
+    smartTemplate: activeSmartTemplate,
+    printSettings: input.profile.printSettings,
+    benefitColumns: input.profile.benefitColumns,
+    visibleColumnIds: input.profile.visibleColumnIds,
+    rows,
+    strengths: [
+      "الإلمام بالمادة العلمية ووضوح الأهداف التعليمية التربوية",
+      "تحسين الممارسات التدريسية بتنفيذ الاستراتيجيات الملائمة وأدوات التقويم المتنوعة",
+      "التنويع في الأنشطة الصفية واللاصفية",
+      "تنمية مهارات التفكير الإبداعي والناقد",
+      "تنمية الثقة بالنفس لدى المتعلم",
+      "مهارات الإدارة الصفية",
+      "التفاعل الإيجابي بين المعلمة والطلبة وبين الطلاب أنفسهم",
+      "وضوح البيئة الصفية الآمنة",
+      "الالتزام بضوابط ومعايير التعلم التعاوني وروح الفريق",
+      "التفعيل الإيجابي للتقنية في مراحل مختلفة من الحصة الدراسية",
+      "التنوع في أساليب التحفيز والتعزيز للطلبة"
+    ],
+    improvements: [
+      "تطبيق الدروس التطبيقية في العام القادم بشكل أكبر للاستفادة والوقوف على بعض الفجوات ومعالجتها",
+      "عمل دروس لتخصصات أخرى",
+      "تطبيقها في أوقات متباعدة بعد قياس الأثر لما سبقها",
+      "زيادة توظيف الوسائل التعليمية والتقنية الحديثة",
+      "إتاحة وقت أطول للتطبيق العملي لجميع المتعلمين",
+      "تعزيز دور المتعلم وجعله محور العملية التعليمية",
+      "تطبيق أساليب تدريس تركز على رفع نواتج التعلم",
+      "زيادة الوقت للتطبيق العملي وتنويع الأساليب بما يناسب مستويات الطلاب"
+    ]
+  });
+}
+
+function allowedContribution(value: unknown) {
+  const text = String(value || "");
+  if (text.includes("متوسطة") || text.includes("متوسط")) return "تساهم بدرجة متوسطة";
+  return "تساهم بدرجة عالية";
+}
+
+function allowedEffectiveness(value: unknown) {
+  const text = String(value || "");
+  if (text.includes("منخفضة")) return "فاعلة بدرجة منخفضة";
+  if (text.includes("متوسطة") || text.includes("متوسط")) return "فاعلة بدرجة متوسطة";
+  return "فاعلة بدرجة عالية";
+}
+
+function sanitizeAiReport(payload: any, input: {
+  email: string;
+  courseTitle: string;
+  level: ImpactLevel;
+  teachers: Teacher[];
+  profile: Profile;
+}) {
+  const fallback = localGeneratedReport(input);
+  const aiRows = Array.isArray(payload?.rows) ? payload.rows : [];
+  const rows = input.teachers.map((teacher, index) => {
+    const aiRow = aiRows[index] || {};
+    const benefits: Record<string, boolean> = {};
+    for (const column of input.profile.benefitColumns) {
+      benefits[column.id] = Boolean(aiRow?.benefits?.[column.id]);
+    }
+    if (!Object.values(benefits).some(Boolean)) {
+      Object.assign(benefits, fallback.rows[index]?.benefits || {});
+    }
+    return {
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      lessonsCount: Math.max(1, Math.min(20, Number(aiRow.lessonsCount) || fallback.rows[index]?.lessonsCount || 1)),
+      contribution: allowedContribution(aiRow.contribution),
+      effectiveness: allowedEffectiveness(aiRow.effectiveness),
+      benefits,
+      acquiredSkills: String(aiRow.acquiredSkills || fallback.rows[index]?.acquiredSkills || "").slice(0, 180)
+    };
+  });
+
+  return composeReport({
+    email: input.email,
+    courseTitle: input.courseTitle,
+    level: input.level,
+    schoolSettings: input.profile.schoolSettings,
+    templateAssets: input.profile.templateAssets,
+    smartTemplate:
+      input.profile.smartTemplates.find((template) => template.id === input.profile.activeSmartTemplateId) ||
+      input.profile.smartTemplates[0],
+    printSettings: input.profile.printSettings,
+    benefitColumns: input.profile.benefitColumns,
+    visibleColumnIds: input.profile.visibleColumnIds,
+    rows,
+    strengths: Array.isArray(payload?.strengths) && payload.strengths.length ? payload.strengths.slice(0, 12) : fallback.strengths,
+    improvements:
+      Array.isArray(payload?.improvements) && payload.improvements.length ? payload.improvements.slice(0, 8) : fallback.improvements
+  });
+}
+
+async function generateWithDeepSeek(input: {
+  email: string;
+  courseTitle: string;
+  level: ImpactLevel;
+  teachers: Teacher[];
+  profile: Profile;
+}) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    throw new Error("لم يتم ضبط DEEPSEEK_API_KEY");
+  }
+
+  const model = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+  const system = `
+أنت وكيل لإعداد تقرير قياس أثر بعدي لنشاط تطوير مهني باللغة العربية.
+أخرج JSON صالح فقط. لا تضف شرحاً خارج JSON.
+لا تغير أسماء المعلمات ولا تضف أسماء.
+اجعل المحتوى مناسباً لبيئة تعليم ابتدائي وبعبارات رسمية مختصرة.
+حقل contribution يقبل قيمتين فقط: "تساهم بدرجة عالية" أو "تساهم بدرجة متوسطة".
+صيغة JSON:
+{
+  "rows": [
+    {
+      "lessonsCount": 1,
+      "contribution": "تساهم بدرجة عالية",
+      "effectiveness": "فاعلة بدرجة عالية",
+      "benefits": { "subject": true },
+      "acquiredSkills": "نص عربي مختصر"
+    }
+  ],
+  "strengths": ["نص"],
+  "improvements": ["نص"]
+}`.trim();
+  const user = {
+    courseTitle: input.courseTitle,
+    level: input.level,
+    levelMeaning:
+      input.level === "high"
+        ? "النسبة العامة مرتفعة وغالب الصفوف عالية"
+        : input.level === "medium"
+          ? "النسبة العامة متوسطة مع بعض الصفوف العالية والمتوسطة"
+          : "النسبة العامة منخفضة مع جعل مساهمة الصفوف بين متوسطة وعالية فقط",
+    benefitColumns: input.profile.benefitColumns,
+    teacherNames: input.teachers.map((teacher) => teacher.name)
+  };
+
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: `json\n${JSON.stringify(user)}` }
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.9,
+    max_tokens: 5000
+  };
+  if (model.startsWith("deepseek-v4")) {
+    body.thinking = { type: "disabled" };
+  }
+
+  const response = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(body)
+  });
+  const payload: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "فشل اتصال DeepSeek");
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("استجابة DeepSeek فارغة");
+  }
+  return sanitizeAiReport(JSON.parse(content), input);
+}
+
+const upload = multer({ dest: uploadDir });
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: "4mb" }));
+app.use("/assets/templates", express.static(assetDir));
+
+app.get("/api/profile", (req, res) => {
+  try {
+    const email = normalizeEmail(req.query.email);
+    const row = db.prepare("SELECT data FROM profiles WHERE email = ?").get(email) as { data: string } | undefined;
+    if (!row) {
+      res.json(emptyProfile(email));
+      return;
+    }
+    res.json({ ...emptyProfile(email), ...JSON.parse(row.data), email });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "طلب غير صحيح" });
+  }
+});
+
+app.put("/api/profile", (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const profile = { ...emptyProfile(email), ...req.body.profile, email };
+    db.prepare(
+      `INSERT INTO profiles (email, data, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`
+    ).run(email, JSON.stringify(profile), nowIso());
+    res.json(profile);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ الملف الشخصي" });
+  }
+});
+
+app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    if (!req.file) {
+      res.status(400).json({ error: "لم يتم رفع ملف PDF" });
+      return;
+    }
+    const profileKey = email.replace(/[^a-z0-9_-]/gi, "_");
+    const profileAssetDir = path.join(assetDir, profileKey);
+    await fsp.mkdir(profileAssetDir, { recursive: true });
+    const imported = await runPythonImport(req.file.path, profileAssetDir);
+    const templateAssets: TemplateAssets = {};
+    if (imported.templateAssets.backgroundUrl) {
+      templateAssets.backgroundUrl = assetUrl(`${profileKey}/${imported.templateAssets.backgroundUrl}`);
+    }
+    if (imported.templateAssets.signatureUrl) {
+      templateAssets.signatureUrl = assetUrl(`${profileKey}/${imported.templateAssets.signatureUrl}`);
+    }
+    const smartTemplateDraft = {
+      ...createDefaultSmartTemplate(templateAssets, "قالب PDF مستورد"),
+      id: `smart-template-${randomUUID()}`,
+      assets: templateAssets
+    };
+    res.json({
+      teachers: imported.teachers,
+      templateAssets,
+      schoolSettings: imported.schoolSettings,
+      smartTemplateDraft
+    });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "تعذر استيراد ملف PDF" });
+  } finally {
+    if (req.file?.path) {
+      fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
+  }
+});
+
+app.post("/api/reports/generate", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const teachers = Array.isArray(req.body.teachers) ? req.body.teachers : [];
+    if (!teachers.length) {
+      res.status(400).json({ error: "لا توجد أسماء معلمات" });
+      return;
+    }
+    const input: {
+      email: string;
+      courseTitle: string;
+      level: ImpactLevel;
+      teachers: Teacher[];
+      profile: Profile;
+    } = {
+      email,
+      courseTitle: String(req.body.courseTitle || "الدروس التطبيقية"),
+      level: (["high", "medium", "low"].includes(req.body.level) ? req.body.level : "high") as ImpactLevel,
+      teachers: teachers.map((teacher: Teacher, index: number) => ({
+        id: teacher.id || `teacher-${index + 1}`,
+        name: String(teacher.name || "").trim()
+      })),
+      profile: { ...emptyProfile(email), ...req.body.profile, email }
+    };
+    if (input.teachers.some((teacher: Teacher) => !teacher.name)) {
+      res.status(400).json({ error: "يوجد اسم معلمة فارغ" });
+      return;
+    }
+    try {
+      const report = await generateWithDeepSeek(input);
+      res.json({ report, source: "deepseek" });
+    } catch (error) {
+      const report = localGeneratedReport(input);
+      res.json({
+        report,
+        source: "local-fallback",
+        warning: `تعذر استخدام DeepSeek، وتم توليد نسخة محلية: ${
+          error instanceof Error ? error.message : "خطأ غير معروف"
+        }`
+      });
+    }
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر توليد التقرير" });
+  }
+});
+
+app.get("/api/reports", (req, res) => {
+  try {
+    const email = normalizeEmail(req.query.email);
+    const rows = db
+      .prepare("SELECT id, email, title, level, data, created_at, updated_at FROM reports WHERE email = ? ORDER BY updated_at DESC")
+      .all(email) as Array<{
+      id: string;
+      email: string;
+      title: string;
+      level: ImpactLevel;
+      data: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        title: row.title,
+        level: row.level,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        report: JSON.parse(row.data)
+      }))
+    );
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تحميل التقارير" });
+  }
+});
+
+function upsertReport(email: string, report: Report) {
+  if (!report?.id) {
+    throw new Error("تقرير غير صحيح");
+  }
+  const updatedAt = nowIso();
+  const nextReport = { ...report, email, updatedAt };
+  db.prepare(
+    `INSERT INTO reports (id, email, title, level, data, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       title = excluded.title,
+       level = excluded.level,
+       data = excluded.data,
+       updated_at = excluded.updated_at`
+  ).run(
+    nextReport.id,
+    email,
+    nextReport.courseTitle,
+    nextReport.level,
+    JSON.stringify(nextReport),
+    nextReport.createdAt || updatedAt,
+    updatedAt
+  );
+  return {
+    id: nextReport.id,
+    email,
+    title: nextReport.courseTitle,
+    level: nextReport.level,
+    createdAt: nextReport.createdAt || updatedAt,
+    updatedAt,
+    report: nextReport
+  };
+}
+
+app.post("/api/reports", (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    res.json(upsertReport(email, req.body.report as Report));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
+  }
+});
+
+app.put("/api/reports/:id", (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    res.json(upsertReport(email, { ...(req.body.report as Report), id: req.params.id }));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
+  }
+});
+
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Impact report server listening on http://localhost:${port}`);
+  });
+}
+
+export default app;

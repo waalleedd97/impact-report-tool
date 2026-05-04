@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+tmp/
+.env
+.vercel/
+.DS_Store
+.playwright-mcp/
+*.log
+*.png
