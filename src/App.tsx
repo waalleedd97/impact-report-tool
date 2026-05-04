@@ -30,6 +30,56 @@ const rememberedEmailKey = "impact-report-email";
 const appName = "المحرر الذكي";
 const appLogoSrc = "/smart-editor-logo.png";
 
+function profileBackupKey(email: string) {
+  return `impact-report-profile:${email}`;
+}
+
+function reportsBackupKey(email: string) {
+  return `impact-report-reports:${email}`;
+}
+
+function readJsonBackup<T>(key: string): T | null {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonBackup(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Browser storage can be disabled or full; the server save remains the source of truth.
+  }
+}
+
+function reportTime(report?: Report) {
+  return report?.updatedAt ? Date.parse(report.updatedAt) || 0 : 0;
+}
+
+function preferLocalProfile(remote: Profile, local: Profile | null) {
+  if (!local) return remote;
+  const remoteHasWork = Boolean(remote.currentReport || remote.teachers.length);
+  const localHasWork = Boolean(local.currentReport || local.teachers.length);
+  if (!remoteHasWork && localHasWork) return local;
+  if (reportTime(local.currentReport) > reportTime(remote.currentReport)) return local;
+  return remote;
+}
+
+function mergeReportBackups(remoteReports: StoredReportMeta[], localReports: StoredReportMeta[] | null) {
+  if (!localReports?.length) return remoteReports;
+  const byId = new Map<string, StoredReportMeta>();
+  for (const report of [...remoteReports, ...localReports]) {
+    const existing = byId.get(report.id);
+    if (!existing || Date.parse(report.updatedAt) > Date.parse(existing.updatedAt)) {
+      byId.set(report.id, report);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
 function makeTeacher(name = ""): Teacher {
   return {
     id: `teacher-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -150,15 +200,22 @@ export default function App() {
     setBusy("تحميل الملف الشخصي");
     Promise.all([loadProfile(email), listReports(email)])
       .then(([loadedProfile, loadedReports]) => {
-        const mergedProfile = normalizeProfile(email, loadedProfile);
+        const localProfile = readJsonBackup<Profile>(profileBackupKey(email));
+        const normalizedRemote = normalizeProfile(email, loadedProfile);
+        const normalizedLocal = localProfile ? normalizeProfile(email, localProfile) : null;
+        const mergedProfile = preferLocalProfile(normalizedRemote, normalizedLocal);
+        const mergedReports = mergeReportBackups(loadedReports, readJsonBackup<StoredReportMeta[]>(reportsBackupKey(email)));
         setProfile(mergedProfile);
-        setReports(loadedReports);
+        setReports(mergedReports);
+        writeJsonBackup(profileBackupKey(email), mergedProfile);
+        writeJsonBackup(reportsBackupKey(email), mergedReports);
         if (!mergedProfile.currentReport && mergedProfile.teachers.length) {
           const reportProfile = {
             ...mergedProfile,
             currentReport: reportFromProfile(mergedProfile, courseTitle, level)
           };
           setProfile(reportProfile);
+          writeJsonBackup(profileBackupKey(email), reportProfile);
         }
       })
       .catch((error) => setMessage(error.message))
@@ -174,6 +231,7 @@ export default function App() {
 
   async function persistProfile(nextProfile: Profile) {
     setProfile(nextProfile);
+    writeJsonBackup(profileBackupKey(nextProfile.email), nextProfile);
     await saveProfile(nextProfile);
   }
 
@@ -265,7 +323,11 @@ export default function App() {
     setBusy("حفظ التقرير");
     try {
       const saved = await saveReport(profile.currentReport);
-      setReports((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      setReports((items) => {
+        const nextReports = [saved, ...items.filter((item) => item.id !== saved.id)];
+        writeJsonBackup(reportsBackupKey(profile.email), nextReports);
+        return nextReports;
+      });
       setMessage("تم حفظ التقرير");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر حفظ التقرير");
