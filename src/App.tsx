@@ -38,9 +38,11 @@ function makeTeacher(name = ""): Teacher {
 }
 
 function levelLabel(level: ImpactLevel) {
+  if (level === "very_high") return "نسبة مرتفعة جداً";
   if (level === "high") return "نسبة مرتفعة";
   if (level === "medium") return "نسبة متوسطة";
-  return "نسبة منخفضة";
+  if (level === "low") return "نسبة منخفضة";
+  return "نسبة منخفضة جداً";
 }
 
 function safeFilename(value: string) {
@@ -527,8 +529,8 @@ export default function App() {
             </label>
             <div className="field-group">
               <span>مستوى النسبة</span>
-              <div className="segmented">
-                {(["high", "medium", "low"] as ImpactLevel[]).map((item) => (
+              <div className="segmented level-segmented">
+                {(["very_high", "high", "medium", "low", "very_low"] as ImpactLevel[]).map((item) => (
                   <button
                     key={item}
                     className={level === item ? "active" : ""}

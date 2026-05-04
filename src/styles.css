@@ -205,6 +205,14 @@ button:disabled {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.level-segmented {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.level-segmented button:first-child {
+  grid-column: 1 / -1;
+}
+
 .tabs button,
 .segmented button {
   border: 0;

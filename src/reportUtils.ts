@@ -11,15 +11,35 @@ import type {
 } from "./types";
 
 const contributionByLevel: Record<ImpactLevel, string[]> = {
+  very_high: ["تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية"],
   high: ["تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة متوسطة"],
   medium: ["تساهم بدرجة عالية", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة"],
-  low: ["تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة عالية"]
+  low: ["تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة عالية"],
+  very_low: ["تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة"]
 };
 
 const effectivenessByLevel: Record<ImpactLevel, string[]> = {
+  very_high: ["فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية"],
   high: ["فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة متوسطة"],
   medium: ["فاعلة بدرجة عالية", "فاعلة بدرجة متوسطة", "فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة"],
-  low: ["فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة عالية"]
+  low: ["فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة عالية"],
+  very_low: ["فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة"]
+};
+
+const impactSummaryByLevel: Record<ImpactLevel, string> = {
+  very_high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة مرتفعة جداً",
+  high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية",
+  medium: "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة",
+  low: "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
+  very_low: "تحتاج الدروس التطبيقية إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات التدريسية"
+};
+
+const percentageRanges: Record<ImpactLevel, [number, number]> = {
+  very_high: [90, 100],
+  high: [75, 89],
+  medium: [50, 74],
+  low: [25, 49],
+  very_low: [5, 24]
 };
 
 const skillPhrases = [
@@ -66,15 +86,74 @@ function choose<T>(items: T[], index: number) {
   return items[index % items.length];
 }
 
+function randomInt(min: number, max: number) {
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+function randomPercent(level: ImpactLevel) {
+  const [min, max] = percentageRanges[level];
+  return randomInt(min, max);
+}
+
+function randomContributionOverrides(level: ImpactLevel) {
+  if (level === "very_high") {
+    const high = randomInt(92, 100);
+    return { high, medium: 100 - high, low: 0 };
+  }
+  if (level === "high") {
+    const high = randomInt(76, 89);
+    return { high, medium: 100 - high, low: 0 };
+  }
+  if (level === "medium") {
+    const high = randomInt(45, 62);
+    const low = randomInt(0, 8);
+    return { high, medium: 100 - high - low, low };
+  }
+  if (level === "low") {
+    const high = randomInt(15, 32);
+    const low = randomInt(18, 35);
+    return { high, medium: 100 - high - low, low };
+  }
+  const high = randomInt(4, 12);
+  const low = randomInt(40, 58);
+  return { high, medium: 100 - high - low, low };
+}
+
+function percentageOverridesForLevel(level: ImpactLevel, columns: BenefitColumn[]) {
+  const contribution = randomContributionOverrides(level);
+  return {
+    attendance: randomPercent(level),
+    contributionHigh: contribution.high,
+    contributionMedium: contribution.medium,
+    contributionLow: contribution.low,
+    effectiveness: randomPercent(level),
+    ...Object.fromEntries(columns.map((column) => [`benefit:${column.id}`, randomPercent(level)]))
+  };
+}
+
 function rowBenefits(columns: BenefitColumn[], level: ImpactLevel, rowIndex: number) {
-  const minimum = level === "high" ? 3 : level === "medium" ? 2 : 1;
-  const spread = level === "high" ? 4 : level === "medium" ? 3 : 2;
+  const minimumByLevel: Record<ImpactLevel, number> = {
+    very_high: 5,
+    high: 3,
+    medium: 2,
+    low: 1,
+    very_low: 0
+  };
+  const spreadByLevel: Record<ImpactLevel, number> = {
+    very_high: 3,
+    high: 4,
+    medium: 3,
+    low: 2,
+    very_low: 2
+  };
+  const minimum = minimumByLevel[level];
+  const spread = spreadByLevel[level];
   const count = Math.min(columns.length, minimum + (rowIndex % spread));
   const benefits: Record<string, boolean> = {};
   columns.forEach((column, columnIndex) => {
     benefits[column.id] = ((columnIndex + rowIndex) % columns.length) < count;
   });
-  if (!Object.values(benefits).some(Boolean) && columns[0]) {
+  if (level !== "very_low" && !Object.values(benefits).some(Boolean) && columns[0]) {
     benefits[columns[0].id] = true;
   }
   return benefits;
@@ -105,14 +184,21 @@ export function localGeneratedReport(input: {
   const rows: ReportRow[] = input.teachers.map((teacher, index) => ({
     teacherId: teacher.id,
     teacherName: teacher.name,
-    lessonsCount: input.level === "high" ? 1 + ((index * 2) % 4) : input.level === "medium" ? 1 + (index % 3) : 1,
+    lessonsCount:
+      input.level === "very_high"
+        ? 3 + ((index * 2) % 4)
+        : input.level === "high"
+          ? 1 + ((index * 2) % 4)
+          : input.level === "medium"
+            ? 1 + (index % 3)
+            : 1,
     contribution: choose(contributionByLevel[input.level], index),
     effectiveness: choose(effectivenessByLevel[input.level], index + 1),
     benefits: rowBenefits(benefitColumns, input.level, index),
     acquiredSkills: choose(skillPhrases, index)
   }));
 
-  return composeReport({
+  const report = composeReport({
     id: makeId("report"),
     email: input.email,
     courseTitle: input.courseTitle || "نشاط تطوير مهني",
@@ -127,6 +213,10 @@ export function localGeneratedReport(input: {
     strengths,
     improvements
   });
+  return {
+    ...report,
+    percentageOverrides: percentageOverridesForLevel(input.level, benefitColumns)
+  };
 }
 
 export function composeReport(input: {
@@ -178,12 +268,7 @@ export function composeReport(input: {
       participantsCount,
       attendancePercentage: totalTeachers ? Math.round((participantsCount / totalTeachers) * 100) : 0,
       implementedLessons,
-      impactSummary:
-        input.level === "high"
-          ? "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية"
-          : input.level === "medium"
-            ? "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة"
-            : "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
+      impactSummary: impactSummaryByLevel[input.level],
       contributionHighPercent: participantsCount ? Math.round((contributionHighCount / participantsCount) * 100) : 0,
       contributionMediumPercent: participantsCount ? Math.round((contributionMediumCount / participantsCount) * 100) : 0,
       contributionLowPercent: participantsCount ? Math.round((contributionLowCount / participantsCount) * 100) : 0,

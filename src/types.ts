@@ -1,4 +1,4 @@
-export type ImpactLevel = "high" | "medium" | "low";
+export type ImpactLevel = "very_high" | "high" | "medium" | "low" | "very_low";
 
 export type Teacher = {
   id: string;

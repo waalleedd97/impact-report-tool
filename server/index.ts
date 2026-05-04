@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 dotenv.config();
 
-type ImpactLevel = "high" | "medium" | "low";
+type ImpactLevel = "very_high" | "high" | "medium" | "low" | "very_low";
 
 type Teacher = {
   id: string;
@@ -416,6 +416,96 @@ function percentage(count: number, total: number) {
   return total ? Math.round((count / total) * 100) : 0;
 }
 
+const impactLevels: ImpactLevel[] = ["very_high", "high", "medium", "low", "very_low"];
+
+const impactSummaryByLevel: Record<ImpactLevel, string> = {
+  very_high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة مرتفعة جداً",
+  high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية",
+  medium: "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة",
+  low: "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
+  very_low: "تحتاج الدروس التطبيقية إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات التدريسية"
+};
+
+const levelMeaningByLevel: Record<ImpactLevel, string> = {
+  very_high: "النسبة العامة مرتفعة جداً؛ اجعل معظم المؤشرات والنسب بين 90 و100",
+  high: "النسبة العامة مرتفعة؛ اجعل معظم المؤشرات والنسب بين 75 و89",
+  medium: "النسبة العامة متوسطة؛ اجعل معظم المؤشرات والنسب بين 50 و74",
+  low: "النسبة العامة منخفضة؛ اجعل معظم المؤشرات والنسب بين 25 و49",
+  very_low: "النسبة العامة منخفضة جداً؛ اجعل معظم المؤشرات والنسب بين 5 و24"
+};
+
+const percentageRanges: Record<ImpactLevel, [number, number]> = {
+  very_high: [90, 100],
+  high: [75, 89],
+  medium: [50, 74],
+  low: [25, 49],
+  very_low: [5, 24]
+};
+
+function randomInt(min: number, max: number) {
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+function randomPercent(level: ImpactLevel) {
+  const [min, max] = percentageRanges[level];
+  return randomInt(min, max);
+}
+
+function clampNumber(value: unknown, min: number, max: number) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return undefined;
+  return Math.max(min, Math.min(max, number));
+}
+
+function randomContributionOverrides(level: ImpactLevel) {
+  if (level === "very_high") {
+    const high = randomInt(92, 100);
+    return { high, medium: 100 - high, low: 0 };
+  }
+  if (level === "high") {
+    const high = randomInt(76, 89);
+    return { high, medium: 100 - high, low: 0 };
+  }
+  if (level === "medium") {
+    const high = randomInt(45, 62);
+    const low = randomInt(0, 8);
+    return { high, medium: 100 - high - low, low };
+  }
+  if (level === "low") {
+    const high = randomInt(15, 32);
+    const low = randomInt(18, 35);
+    return { high, medium: 100 - high - low, low };
+  }
+  const high = randomInt(4, 12);
+  const low = randomInt(40, 58);
+  return { high, medium: 100 - high - low, low };
+}
+
+function percentageOverridesForLevel(level: ImpactLevel, columns: BenefitColumn[], aiOverrides?: Record<string, unknown>) {
+  const [min, max] = percentageRanges[level];
+  const contribution = randomContributionOverrides(level);
+  const defaults: Record<string, number> = {
+    attendance: randomPercent(level),
+    contributionHigh: contribution.high,
+    contributionMedium: contribution.medium,
+    contributionLow: contribution.low,
+    effectiveness: randomPercent(level)
+  };
+  for (const column of columns) {
+    defaults[`benefit:${column.id}`] = randomPercent(level);
+  }
+
+  const next: Record<string, number> = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    if (key.startsWith("contribution")) {
+      next[key] = fallback;
+      continue;
+    }
+    next[key] = clampNumber(aiOverrides?.[key], min, max) ?? fallback;
+  }
+  return next;
+}
+
 function composeReport(input: {
   id?: string;
   email: string;
@@ -460,12 +550,7 @@ function composeReport(input: {
       participantsCount,
       attendancePercentage: percentage(participantsCount, totalTeachers),
       implementedLessons,
-      impactSummary:
-        input.level === "high"
-          ? "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية"
-          : input.level === "medium"
-            ? "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة"
-            : "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
+      impactSummary: impactSummaryByLevel[input.level],
       contributionHighPercent: percentage(rows.filter((row) => row.contribution.includes("عالية")).length, participantsCount),
       contributionMediumPercent: percentage(
         rows.filter((row) => row.contribution.includes("متوسطة")).length,
@@ -503,41 +588,51 @@ function localGeneratedReport(input: {
   const activeSmartTemplate =
     input.profile.smartTemplates.find((template) => template.id === input.profile.activeSmartTemplateId) ||
     input.profile.smartTemplates[0];
-  const high = input.level === "high";
-  const medium = input.level === "medium";
+  const contributionOptions: Record<ImpactLevel, string[]> = {
+    very_high: ["تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية"],
+    high: ["تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة عالية", "تساهم بدرجة متوسطة"],
+    medium: ["تساهم بدرجة عالية", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة"],
+    low: ["تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة عالية"],
+    very_low: ["تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة", "تساهم بدرجة متوسطة"]
+  };
+  const effectivenessOptions: Record<ImpactLevel, string[]> = {
+    very_high: ["فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية"],
+    high: ["فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة عالية", "فاعلة بدرجة متوسطة"],
+    medium: ["فاعلة بدرجة عالية", "فاعلة بدرجة متوسطة", "فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة"],
+    low: ["فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة عالية"],
+    very_low: ["فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة"]
+  };
   const rows = input.teachers.map((teacher, index) => {
     const benefits: Record<string, boolean> = {};
-    const count = high ? 4 + (index % 3) : medium ? 2 + (index % 3) : 1 + (index % 2);
+    const countByLevel: Record<ImpactLevel, number> = {
+      very_high: 5 + (index % 3),
+      high: 4 + (index % 3),
+      medium: 2 + (index % 3),
+      low: 1 + (index % 2),
+      very_low: index % 4 === 0 ? 1 : 0
+    };
+    const count = Math.min(input.profile.benefitColumns.length, countByLevel[input.level]);
     input.profile.benefitColumns.forEach((column, columnIndex) => {
       benefits[column.id] = ((columnIndex + index) % input.profile.benefitColumns.length) < count;
     });
     return {
       teacherId: teacher.id,
       teacherName: teacher.name,
-      lessonsCount: high ? 1 + ((index * 2) % 4) : medium ? 1 + (index % 3) : 1,
-      contribution: high
-        ? index % 13 === 0
-          ? "تساهم بدرجة متوسطة"
-          : "تساهم بدرجة عالية"
-        : medium
-          ? index % 4 === 0
-            ? "تساهم بدرجة عالية"
-            : "تساهم بدرجة متوسطة"
-          : index % 5 === 0
-            ? "تساهم بدرجة عالية"
-            : "تساهم بدرجة متوسطة",
-      effectiveness: high
-        ? "فاعلة بدرجة عالية"
-        : medium
-          ? index % 4 === 0
-            ? "فاعلة بدرجة عالية"
-            : "فاعلة بدرجة متوسطة"
-          : "فاعلة بدرجة منخفضة",
+      lessonsCount:
+        input.level === "very_high"
+          ? 3 + ((index * 2) % 4)
+          : input.level === "high"
+            ? 1 + ((index * 2) % 4)
+            : input.level === "medium"
+              ? 1 + (index % 3)
+              : 1,
+      contribution: contributionOptions[input.level][index % contributionOptions[input.level].length],
+      effectiveness: effectivenessOptions[input.level][(index + 1) % effectivenessOptions[input.level].length],
       benefits,
       acquiredSkills: skillPhrases[index % skillPhrases.length]
     };
   });
-  return composeReport({
+  const report = composeReport({
     email: input.email,
     courseTitle: input.courseTitle || "الدروس التطبيقية",
     level: input.level,
@@ -575,6 +670,10 @@ function localGeneratedReport(input: {
       "زيادة الوقت للتطبيق العملي وتنويع الأساليب بما يناسب مستويات الطلاب"
     ]
   });
+  return {
+    ...report,
+    percentageOverrides: percentageOverridesForLevel(input.level, input.profile.benefitColumns)
+  };
 }
 
 function allowedContribution(value: unknown) {
@@ -611,7 +710,7 @@ function sanitizeAiReport(payload: any, input: {
     return {
       teacherId: teacher.id,
       teacherName: teacher.name,
-      lessonsCount: Math.max(1, Math.min(20, Number(aiRow.lessonsCount) || fallback.rows[index]?.lessonsCount || 1)),
+      lessonsCount: Math.max(1, Math.min(999, Number(aiRow.lessonsCount) || fallback.rows[index]?.lessonsCount || 1)),
       contribution: allowedContribution(aiRow.contribution),
       effectiveness: allowedEffectiveness(aiRow.effectiveness),
       benefits,
@@ -619,7 +718,7 @@ function sanitizeAiReport(payload: any, input: {
     };
   });
 
-  return composeReport({
+  const report = composeReport({
     email: input.email,
     courseTitle: input.courseTitle,
     level: input.level,
@@ -636,6 +735,10 @@ function sanitizeAiReport(payload: any, input: {
     improvements:
       Array.isArray(payload?.improvements) && payload.improvements.length ? payload.improvements.slice(0, 8) : fallback.improvements
   });
+  return {
+    ...report,
+    percentageOverrides: percentageOverridesForLevel(input.level, input.profile.benefitColumns, payload?.percentageOverrides)
+  };
 }
 
 async function generateWithDeepSeek(input: {
@@ -657,6 +760,8 @@ async function generateWithDeepSeek(input: {
 لا تغير أسماء المعلمات ولا تضف أسماء.
 اجعل المحتوى مناسباً لبيئة تعليم ابتدائي وبعبارات رسمية مختصرة.
 حقل contribution يقبل قيمتين فقط: "تساهم بدرجة عالية" أو "تساهم بدرجة متوسطة".
+اكتب نقاط القوة وفرص التحسين بناءً على عنوان النشاط، ولا تجعلها عامة جداً.
+اكتب percentageOverrides كنسب عشوائية من 0 إلى 100 ضمن النطاق المطلوب للدرجة المختارة.
 صيغة JSON:
 {
   "rows": [
@@ -669,17 +774,23 @@ async function generateWithDeepSeek(input: {
     }
   ],
   "strengths": ["نص"],
-  "improvements": ["نص"]
+  "improvements": ["نص"],
+  "percentageOverrides": {
+    "attendance": 92,
+    "effectiveness": 91,
+    "benefit:subject": 93
+  }
 }`.trim();
   const user = {
     courseTitle: input.courseTitle,
     level: input.level,
-    levelMeaning:
-      input.level === "high"
-        ? "النسبة العامة مرتفعة وغالب الصفوف عالية"
-        : input.level === "medium"
-          ? "النسبة العامة متوسطة مع بعض الصفوف العالية والمتوسطة"
-          : "النسبة العامة منخفضة مع جعل مساهمة الصفوف بين متوسطة وعالية فقط",
+    levelMeaning: levelMeaningByLevel[input.level],
+    allowedPercentageRange: percentageRanges[input.level],
+    percentageOverrideKeys: [
+      "attendance",
+      "effectiveness",
+      ...input.profile.benefitColumns.map((column) => `benefit:${column.id}`)
+    ],
     benefitColumns: input.profile.benefitColumns,
     teacherNames: input.teachers.map((teacher) => teacher.name)
   };
@@ -808,7 +919,7 @@ app.post("/api/reports/generate", async (req, res) => {
     } = {
       email,
       courseTitle: String(req.body.courseTitle || "الدروس التطبيقية"),
-      level: (["high", "medium", "low"].includes(req.body.level) ? req.body.level : "high") as ImpactLevel,
+      level: (impactLevels.includes(req.body.level) ? req.body.level : "high") as ImpactLevel,
       teachers: teachers.map((teacher: Teacher, index: number) => ({
         id: teacher.id || `teacher-${index + 1}`,
         name: String(teacher.name || "").trim()
