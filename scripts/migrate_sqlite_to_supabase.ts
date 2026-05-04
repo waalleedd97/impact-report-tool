@@ -8,9 +8,9 @@ dotenv.config();
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const bucketName = process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets";
-const dataBucketName = process.env.SUPABASE_DATA_BUCKET || "smart-editor-data";
-const forceStorageData = process.env.SUPABASE_DATA_MODE === "storage";
+const bucketName = (process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets").trim();
+const dataBucketName = (process.env.SUPABASE_DATA_BUCKET || "smart-editor-data").trim();
+const forceStorageData = process.env.SUPABASE_DATA_MODE?.trim() === "storage";
 const rootDir = process.cwd();
 const dbPath = path.join(rootDir, "data", "app.db");
 const assetsDir = path.join(rootDir, "data", "assets");

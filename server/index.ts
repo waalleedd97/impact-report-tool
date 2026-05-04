@@ -249,10 +249,10 @@ const supabase: SupabaseClient | null =
         }
       })
     : null;
-const supabaseDataBucket = process.env.SUPABASE_DATA_BUCKET || "smart-editor-data";
+const supabaseDataBucket = (process.env.SUPABASE_DATA_BUCKET || "smart-editor-data").trim();
 let supabaseDataBucketReady = false;
 let supabaseDataMode: "postgres" | "storage-json" =
-  process.env.SUPABASE_DATA_MODE === "storage" ? "storage-json" : "postgres";
+  process.env.SUPABASE_DATA_MODE?.trim() === "storage" ? "storage-json" : "postgres";
 
 function storageLabel() {
   return supabase ? `supabase-${supabaseDataMode}` : "sqlite";
@@ -678,7 +678,7 @@ function assetUrl(filename: string) {
   return `/assets/templates/${filename.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-const supabaseAssetsBucket = process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets";
+const supabaseAssetsBucket = (process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets").trim();
 let supabaseAssetsBucketReady = false;
 
 async function ensureSupabaseAssetsBucket() {
