@@ -27,6 +27,8 @@ import { reportFromProfile } from "./reportUtils";
 import type { ImpactLevel, PrintSettings, Profile, Report, SmartTemplate, StoredReportMeta, Teacher } from "./types";
 
 const rememberedEmailKey = "impact-report-email";
+const appName = "المحرر الذكي";
+const appLogoSrc = "/smart-editor-logo.png";
 
 function makeTeacher(name = ""): Teacher {
   return {
@@ -446,8 +448,10 @@ export default function App() {
     return (
       <main className="login-screen" dir="rtl">
         <form className="login-panel" onSubmit={login}>
-          <FileText size={34} />
-          <h1>أداة تقرير قياس الأثر</h1>
+          <div className="login-brand">
+            <img src={appLogoSrc} alt={appName} />
+            <h1>{appName}</h1>
+          </div>
           <label>
             البريد
             <input
@@ -478,9 +482,12 @@ export default function App() {
     <main className="app-shell" dir="rtl">
       <aside className="control-panel">
         <header className="app-header">
-          <div>
-            <h1>تقرير قياس الأثر</h1>
-            <p>{email}</p>
+          <div className="app-brand">
+            <img src={appLogoSrc} alt={appName} className="app-logo" />
+            <div>
+              <h1>{appName}</h1>
+              <p>{email}</p>
+            </div>
           </div>
           <button
             className="icon-button"
