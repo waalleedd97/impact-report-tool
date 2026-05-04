@@ -21,6 +21,9 @@ cp .env.example .env
 ```bash
 DEEPSEEK_API_KEY=ضع_المفتاح_هنا
 DEEPSEEK_MODEL=deepseek-v4-flash
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ASSETS_BUCKET=smart-editor-assets
 ```
 
 3. شغل التطبيق:
@@ -37,11 +40,31 @@ pnpm dev
 - رفع PDF أول مرة لاستخراج أسماء المعلمات والقالب.
 - مراجعة الأسماء يدوياً من تبويب المعلمات.
 - إدخال عنوان النشاط واختيار مستوى النسبة ثم توليد التقرير.
-- الحفظ يخزن التقرير في SQLite داخل `data/app.db`.
+- الحفظ يخزن التقرير في Supabase عند ضبط متغيرات Supabase، وإلا يستخدم SQLite محلياً داخل `data/app.db`.
 - الطباعة من زر طباعة تحفظ التقرير PDF من المتصفح.
+
+## Supabase
+
+1. أنشئ مشروع Supabase.
+2. افتح SQL Editor وشغل محتوى الملف `supabase/schema.sql`.
+3. أضف المتغيرات التالية محلياً وفي Vercel:
+
+```bash
+SUPABASE_URL=رابط_مشروع_Supabase
+SUPABASE_SERVICE_ROLE_KEY=service_role_key
+SUPABASE_ASSETS_BUCKET=smart-editor-assets
+```
+
+4. لترحيل بيانات SQLite الحالية إلى Supabase:
+
+```bash
+pnpm migrate:supabase
+```
+
+الخادم يستخدم مفتاح `service_role` من جهة الخادم فقط، ولا يرسله للمتصفح.
 
 ## النشر التجريبي على Vercel
 
 المشروع مهيأ للنشر على Vercel عبر `vercel.json`. يعمل الخادم كدالة Serverless من `api/index.ts`.
 
-ملاحظة مهمة: نسخة Vercel الحالية للتجارب العامة فقط. التخزين هناك يستخدم مساحة مؤقتة داخل `/tmp`، لذلك لا يعتمد عليه كأرشيف دائم للتقارير أو ملفات PDF. للإطلاق الحقيقي اربط التخزين بقاعدة بيانات دائمة مثل Supabase أو Neon أو Vercel Postgres، وارفع أصول القوالب إلى تخزين ملفات دائم.
+ملاحظة مهمة: بدون متغيرات Supabase ستستخدم نسخة Vercel مساحة مؤقتة داخل `/tmp`. بعد ضبط Supabase تصبح الملفات الشخصية والتقارير وقوالب PDF المستوردة محفوظة في Supabase.

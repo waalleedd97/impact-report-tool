@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -191,6 +192,16 @@ type Report = {
   improvements: string[];
 };
 
+type StoredReportMeta = {
+  id: string;
+  email: string;
+  title: string;
+  level: ImpactLevel;
+  createdAt: string;
+  updatedAt: string;
+  report: Report;
+};
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = process.env.VERCEL ? path.join("/tmp", "impact-report-tool") : path.join(rootDir, "data");
@@ -224,6 +235,157 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS reports_email_updated_idx
     ON reports (email, updated_at DESC);
 `);
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase: SupabaseClient | null =
+  supabaseUrl && supabaseServiceRoleKey
+    ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      })
+    : null;
+
+function storageLabel() {
+  return supabase ? "supabase" : "sqlite";
+}
+
+async function loadProfileData(email: string) {
+  if (supabase) {
+    const { data, error } = await supabase.from("profiles").select("data").eq("email", email).maybeSingle();
+    if (error) {
+      throw new Error(error.message);
+    }
+    return data?.data as Partial<Profile> | undefined;
+  }
+
+  const row = db.prepare("SELECT data FROM profiles WHERE email = ?").get(email) as { data: string } | undefined;
+  return row ? (JSON.parse(row.data) as Partial<Profile>) : undefined;
+}
+
+async function saveProfileData(email: string, profile: Profile) {
+  if (supabase) {
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        email,
+        data: profile,
+        updated_at: nowIso()
+      },
+      { onConflict: "email" }
+    );
+    if (error) {
+      throw new Error(error.message);
+    }
+    return profile;
+  }
+
+  db.prepare(
+    `INSERT INTO profiles (email, data, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(email) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`
+  ).run(email, JSON.stringify(profile), nowIso());
+  return profile;
+}
+
+function reportMetaFromReport(report: Report): StoredReportMeta {
+  return {
+    id: report.id,
+    email: report.email,
+    title: report.courseTitle,
+    level: report.level,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+    report
+  };
+}
+
+async function listReportData(email: string) {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("reports")
+      .select("id,email,title,level,data,created_at,updated_at")
+      .eq("email", email)
+      .order("updated_at", { ascending: false });
+    if (error) {
+      throw new Error(error.message);
+    }
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      title: row.title,
+      level: row.level as ImpactLevel,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      report: row.data as Report
+    }));
+  }
+
+  const rows = db
+    .prepare("SELECT id, email, title, level, data, created_at, updated_at FROM reports WHERE email = ? ORDER BY updated_at DESC")
+    .all(email) as Array<{
+    id: string;
+    email: string;
+    title: string;
+    level: ImpactLevel;
+    data: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    title: row.title,
+    level: row.level,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    report: JSON.parse(row.data) as Report
+  }));
+}
+
+async function upsertReportData(email: string, report: Report) {
+  if (!report?.id) {
+    throw new Error("تقرير غير صحيح");
+  }
+
+  const updatedAt = nowIso();
+  const nextReport = { ...report, email, updatedAt };
+  const meta = reportMetaFromReport({
+    ...nextReport,
+    createdAt: nextReport.createdAt || updatedAt
+  });
+
+  if (supabase) {
+    const { error } = await supabase.from("reports").upsert(
+      {
+        id: meta.id,
+        email,
+        title: meta.title,
+        level: meta.level,
+        data: meta.report,
+        created_at: meta.createdAt,
+        updated_at: meta.updatedAt
+      },
+      { onConflict: "id" }
+    );
+    if (error) {
+      throw new Error(error.message);
+    }
+    return meta;
+  }
+
+  db.prepare(
+    `INSERT INTO reports (id, email, title, level, data, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       title = excluded.title,
+       level = excluded.level,
+       data = excluded.data,
+       updated_at = excluded.updated_at`
+  ).run(meta.id, email, meta.title, meta.level, JSON.stringify(meta.report), meta.createdAt, meta.updatedAt);
+  return meta;
+}
 
 const defaultBenefitColumns: BenefitColumn[] = [
   { id: "subject", label: "فهم المادة الدراسية" },
@@ -376,6 +538,43 @@ function nowIso() {
 
 function assetUrl(filename: string) {
   return `/assets/templates/${filename.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+const supabaseAssetsBucket = process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets";
+let supabaseAssetsBucketReady = false;
+
+async function ensureSupabaseAssetsBucket() {
+  if (!supabase || supabaseAssetsBucketReady) return;
+  const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+  if (listError) {
+    throw new Error(`تعذر فحص مساحة ملفات Supabase: ${listError.message}`);
+  }
+  if (!buckets?.some((bucket) => bucket.name === supabaseAssetsBucket)) {
+    const { error } = await supabase.storage.createBucket(supabaseAssetsBucket, { public: false });
+    if (error) {
+      throw new Error(`تعذر إنشاء مساحة ملفات Supabase: ${error.message}`);
+    }
+  }
+  supabaseAssetsBucketReady = true;
+}
+
+async function saveTemplateAsset(profileKey: string, filename: string, localFilePath: string) {
+  const safeFilename = path.basename(filename);
+  const storagePath = `${profileKey}/${safeFilename}`;
+  if (supabase) {
+    await ensureSupabaseAssetsBucket();
+    const contentType = safeFilename.toLowerCase().endsWith(".png") ? "image/png" : "application/octet-stream";
+    const { error } = await supabase.storage
+      .from(supabaseAssetsBucket)
+      .upload(storagePath, await fsp.readFile(localFilePath), {
+        contentType,
+        upsert: true
+      });
+    if (error) {
+      throw new Error(`تعذر حفظ أصل القالب في Supabase: ${error.message}`);
+    }
+  }
+  return assetUrl(storagePath);
 }
 
 function runPythonImport(pdfPath: string, profileAssetDir: string): Promise<{
@@ -837,32 +1036,55 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "4mb" }));
+app.get(/^\/assets\/templates\/(.+)$/, async (req, res, next) => {
+  if (!supabase) {
+    next();
+    return;
+  }
+  try {
+    const storagePath = decodeURIComponent(String(req.params[0] || ""));
+    const { data, error } = await supabase.storage.from(supabaseAssetsBucket).download(storagePath);
+    if (error || !data) {
+      next();
+      return;
+    }
+    const buffer = Buffer.from(await data.arrayBuffer());
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.type(path.extname(storagePath) || "application/octet-stream");
+    res.send(buffer);
+  } catch {
+    next();
+  }
+});
 app.use("/assets/templates", express.static(assetDir));
 
-app.get("/api/profile", (req, res) => {
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    storage: storageLabel(),
+    assets: supabase ? "supabase-storage" : "local-files"
+  });
+});
+
+app.get("/api/profile", async (req, res) => {
   try {
     const email = normalizeEmail(req.query.email);
-    const row = db.prepare("SELECT data FROM profiles WHERE email = ?").get(email) as { data: string } | undefined;
-    if (!row) {
+    const profile = await loadProfileData(email);
+    if (!profile) {
       res.json(emptyProfile(email));
       return;
     }
-    res.json({ ...emptyProfile(email), ...JSON.parse(row.data), email });
+    res.json({ ...emptyProfile(email), ...profile, email });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "طلب غير صحيح" });
   }
 });
 
-app.put("/api/profile", (req, res) => {
+app.put("/api/profile", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const profile = { ...emptyProfile(email), ...req.body.profile, email };
-    db.prepare(
-      `INSERT INTO profiles (email, data, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(email) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`
-    ).run(email, JSON.stringify(profile), nowIso());
-    res.json(profile);
+    res.json(await saveProfileData(email, profile));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ الملف الشخصي" });
   }
@@ -881,10 +1103,12 @@ app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
     const imported = await runPythonImport(req.file.path, profileAssetDir);
     const templateAssets: TemplateAssets = {};
     if (imported.templateAssets.backgroundUrl) {
-      templateAssets.backgroundUrl = assetUrl(`${profileKey}/${imported.templateAssets.backgroundUrl}`);
+      const filename = path.basename(imported.templateAssets.backgroundUrl);
+      templateAssets.backgroundUrl = await saveTemplateAsset(profileKey, filename, path.join(profileAssetDir, filename));
     }
     if (imported.templateAssets.signatureUrl) {
-      templateAssets.signatureUrl = assetUrl(`${profileKey}/${imported.templateAssets.signatureUrl}`);
+      const filename = path.basename(imported.templateAssets.signatureUrl);
+      templateAssets.signatureUrl = await saveTemplateAsset(profileKey, filename, path.join(profileAssetDir, filename));
     }
     const smartTemplateDraft = {
       ...createDefaultSmartTemplate(templateAssets, "قالب PDF مستورد"),
@@ -952,83 +1176,28 @@ app.post("/api/reports/generate", async (req, res) => {
   }
 });
 
-app.get("/api/reports", (req, res) => {
+app.get("/api/reports", async (req, res) => {
   try {
     const email = normalizeEmail(req.query.email);
-    const rows = db
-      .prepare("SELECT id, email, title, level, data, created_at, updated_at FROM reports WHERE email = ? ORDER BY updated_at DESC")
-      .all(email) as Array<{
-      id: string;
-      email: string;
-      title: string;
-      level: ImpactLevel;
-      data: string;
-      created_at: string;
-      updated_at: string;
-    }>;
-    res.json(
-      rows.map((row) => ({
-        id: row.id,
-        email: row.email,
-        title: row.title,
-        level: row.level,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        report: JSON.parse(row.data)
-      }))
-    );
+    res.json(await listReportData(email));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تحميل التقارير" });
   }
 });
 
-function upsertReport(email: string, report: Report) {
-  if (!report?.id) {
-    throw new Error("تقرير غير صحيح");
-  }
-  const updatedAt = nowIso();
-  const nextReport = { ...report, email, updatedAt };
-  db.prepare(
-    `INSERT INTO reports (id, email, title, level, data, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       title = excluded.title,
-       level = excluded.level,
-       data = excluded.data,
-       updated_at = excluded.updated_at`
-  ).run(
-    nextReport.id,
-    email,
-    nextReport.courseTitle,
-    nextReport.level,
-    JSON.stringify(nextReport),
-    nextReport.createdAt || updatedAt,
-    updatedAt
-  );
-  return {
-    id: nextReport.id,
-    email,
-    title: nextReport.courseTitle,
-    level: nextReport.level,
-    createdAt: nextReport.createdAt || updatedAt,
-    updatedAt,
-    report: nextReport
-  };
-}
-
-app.post("/api/reports", (req, res) => {
+app.post("/api/reports", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
-    res.json(upsertReport(email, req.body.report as Report));
+    res.json(await upsertReportData(email, req.body.report as Report));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
   }
 });
 
-app.put("/api/reports/:id", (req, res) => {
+app.put("/api/reports/:id", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
-    res.json(upsertReport(email, { ...(req.body.report as Report), id: req.params.id }));
+    res.json(await upsertReportData(email, { ...(req.body.report as Report), id: req.params.id }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
   }
