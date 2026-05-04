@@ -238,6 +238,8 @@ db.exec(`
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseConfigured = Boolean(supabaseUrl && supabaseServiceRoleKey);
+const supabaseConfigIssue = supabaseUrl && !supabaseServiceRoleKey ? "missing-service-role-key" : null;
 const supabase: SupabaseClient | null =
   supabaseUrl && supabaseServiceRoleKey
     ? createClient(supabaseUrl, supabaseServiceRoleKey, {
@@ -247,15 +249,130 @@ const supabase: SupabaseClient | null =
         }
       })
     : null;
+const supabaseDataBucket = process.env.SUPABASE_DATA_BUCKET || "smart-editor-data";
+let supabaseDataBucketReady = false;
+let supabaseDataMode: "postgres" | "storage-json" =
+  process.env.SUPABASE_DATA_MODE === "storage" ? "storage-json" : "postgres";
 
 function storageLabel() {
-  return supabase ? "supabase" : "sqlite";
+  return supabase ? `supabase-${supabaseDataMode}` : "sqlite";
+}
+
+function isMissingSupabaseTable(error: unknown) {
+  const candidate = error as { code?: string; message?: string } | null;
+  return candidate?.code === "PGRST205" || Boolean(candidate?.message?.includes("Could not find the table"));
+}
+
+function isStorageNotFound(error: unknown) {
+  const candidate = error as { statusCode?: string | number; message?: string } | null;
+  return candidate?.statusCode === "404" || candidate?.statusCode === 404 || Boolean(candidate?.message?.includes("not found"));
+}
+
+function safeStorageKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9@._-]/gi, "_");
+}
+
+function profileStoragePath(email: string) {
+  return `profiles/${safeStorageKey(email)}.json`;
+}
+
+function reportStorageFolder(email: string) {
+  return `reports/${safeStorageKey(email)}`;
+}
+
+function reportStoragePath(email: string, reportId: string) {
+  return `${reportStorageFolder(email)}/${safeStorageKey(reportId)}.json`;
+}
+
+async function ensureSupabaseDataBucket() {
+  if (!supabase || supabaseDataBucketReady) return;
+  const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+  if (listError) {
+    throw new Error(`تعذر فحص مساحة بيانات Supabase: ${listError.message}`);
+  }
+  if (!buckets?.some((bucket) => bucket.name === supabaseDataBucket)) {
+    const { error } = await supabase.storage.createBucket(supabaseDataBucket, { public: false });
+    if (error) {
+      throw new Error(`تعذر إنشاء مساحة بيانات Supabase: ${error.message}`);
+    }
+  }
+  supabaseDataBucketReady = true;
+}
+
+async function downloadSupabaseJson<T>(storagePath: string): Promise<T | undefined> {
+  if (!supabase) return undefined;
+  await ensureSupabaseDataBucket();
+  const { data, error } = await supabase.storage.from(supabaseDataBucket).download(storagePath);
+  if (error) {
+    if (isStorageNotFound(error)) return undefined;
+    throw new Error(error.message);
+  }
+  if (!data) return undefined;
+  return JSON.parse(await data.text()) as T;
+}
+
+async function uploadSupabaseJson(storagePath: string, data: unknown) {
+  if (!supabase) return;
+  await ensureSupabaseDataBucket();
+  const { error } = await supabase.storage.from(supabaseDataBucket).upload(
+    storagePath,
+    Buffer.from(JSON.stringify(data, null, 2)),
+    {
+      contentType: "application/json; charset=utf-8",
+      upsert: true
+    }
+  );
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+async function loadProfileFromSupabaseStorage(email: string) {
+  return downloadSupabaseJson<Partial<Profile>>(profileStoragePath(email));
+}
+
+async function saveProfileToSupabaseStorage(email: string, profile: Profile) {
+  await uploadSupabaseJson(profileStoragePath(email), profile);
+  return profile;
+}
+
+async function listReportsFromSupabaseStorage(email: string) {
+  if (!supabase) return [];
+  await ensureSupabaseDataBucket();
+  const { data, error } = await supabase.storage.from(supabaseDataBucket).list(reportStorageFolder(email), {
+    limit: 200,
+    sortBy: { column: "updated_at", order: "desc" }
+  });
+  if (error) {
+    if (isStorageNotFound(error)) return [];
+    throw new Error(error.message);
+  }
+  const reports = await Promise.all(
+    (data || [])
+      .filter((item) => item.name.endsWith(".json"))
+      .map((item) => downloadSupabaseJson<StoredReportMeta>(`${reportStorageFolder(email)}/${item.name}`))
+  );
+  return reports
+    .filter((report): report is StoredReportMeta => Boolean(report))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+async function saveReportToSupabaseStorage(email: string, meta: StoredReportMeta) {
+  await uploadSupabaseJson(reportStoragePath(email, meta.id), meta);
+  return meta;
 }
 
 async function loadProfileData(email: string) {
   if (supabase) {
+    if (supabaseDataMode === "storage-json") {
+      return loadProfileFromSupabaseStorage(email);
+    }
     const { data, error } = await supabase.from("profiles").select("data").eq("email", email).maybeSingle();
     if (error) {
+      if (isMissingSupabaseTable(error)) {
+        supabaseDataMode = "storage-json";
+        return loadProfileFromSupabaseStorage(email);
+      }
       throw new Error(error.message);
     }
     return data?.data as Partial<Profile> | undefined;
@@ -267,6 +384,9 @@ async function loadProfileData(email: string) {
 
 async function saveProfileData(email: string, profile: Profile) {
   if (supabase) {
+    if (supabaseDataMode === "storage-json") {
+      return saveProfileToSupabaseStorage(email, profile);
+    }
     const { error } = await supabase.from("profiles").upsert(
       {
         email,
@@ -276,6 +396,10 @@ async function saveProfileData(email: string, profile: Profile) {
       { onConflict: "email" }
     );
     if (error) {
+      if (isMissingSupabaseTable(error)) {
+        supabaseDataMode = "storage-json";
+        return saveProfileToSupabaseStorage(email, profile);
+      }
       throw new Error(error.message);
     }
     return profile;
@@ -303,12 +427,19 @@ function reportMetaFromReport(report: Report): StoredReportMeta {
 
 async function listReportData(email: string) {
   if (supabase) {
+    if (supabaseDataMode === "storage-json") {
+      return listReportsFromSupabaseStorage(email);
+    }
     const { data, error } = await supabase
       .from("reports")
       .select("id,email,title,level,data,created_at,updated_at")
       .eq("email", email)
       .order("updated_at", { ascending: false });
     if (error) {
+      if (isMissingSupabaseTable(error)) {
+        supabaseDataMode = "storage-json";
+        return listReportsFromSupabaseStorage(email);
+      }
       throw new Error(error.message);
     }
     return (data || []).map((row: any) => ({
@@ -357,6 +488,9 @@ async function upsertReportData(email: string, report: Report) {
   });
 
   if (supabase) {
+    if (supabaseDataMode === "storage-json") {
+      return saveReportToSupabaseStorage(email, meta);
+    }
     const { error } = await supabase.from("reports").upsert(
       {
         id: meta.id,
@@ -370,6 +504,10 @@ async function upsertReportData(email: string, report: Report) {
       { onConflict: "id" }
     );
     if (error) {
+      if (isMissingSupabaseTable(error)) {
+        supabaseDataMode = "storage-json";
+        return saveReportToSupabaseStorage(email, meta);
+      }
       throw new Error(error.message);
     }
     return meta;
@@ -1062,7 +1200,9 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     storage: storageLabel(),
-    assets: supabase ? "supabase-storage" : "local-files"
+    assets: supabase ? "supabase-storage" : "local-files",
+    supabaseConfigured,
+    supabaseConfigIssue
   });
 });
 

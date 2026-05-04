@@ -24,6 +24,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_ASSETS_BUCKET=smart-editor-assets
+SUPABASE_DATA_BUCKET=smart-editor-data
+SUPABASE_DATA_MODE=storage
 ```
 
 3. شغل التطبيق:
@@ -46,22 +48,26 @@ pnpm dev
 ## Supabase
 
 1. أنشئ مشروع Supabase.
-2. افتح SQL Editor وشغل محتوى الملف `supabase/schema.sql`.
-3. أضف المتغيرات التالية محلياً وفي Vercel:
+2. أضف المتغيرات التالية محلياً وفي Vercel:
 
 ```bash
 SUPABASE_URL=رابط_مشروع_Supabase
 SUPABASE_SERVICE_ROLE_KEY=service_role_key
+SUPABASE_PUBLISHABLE_KEY=publishable_key
 SUPABASE_ASSETS_BUCKET=smart-editor-assets
+SUPABASE_DATA_BUCKET=smart-editor-data
+SUPABASE_DATA_MODE=storage
 ```
 
-4. لترحيل بيانات SQLite الحالية إلى Supabase:
+الوضع الافتراضي `SUPABASE_DATA_MODE=storage` يحفظ الملفات الشخصية والتقارير كملفات JSON خاصة داخل Supabase Storage، ولا يحتاج إنشاء جداول يدوياً. إذا رغبت لاحقاً باستخدام Postgres بدلاً من Storage، شغل محتوى `supabase/schema.sql` داخل SQL Editor ثم غيّر `SUPABASE_DATA_MODE` إلى `postgres`.
+
+3. لترحيل بيانات SQLite الحالية إلى Supabase:
 
 ```bash
 pnpm migrate:supabase
 ```
 
-الخادم يستخدم مفتاح `service_role` من جهة الخادم فقط، ولا يرسله للمتصفح.
+الخادم يستخدم مفتاح `service_role` من جهة الخادم فقط، ولا يرسله للمتصفح. مفتاح `publishable` وحده لا يكفي للحفظ الدائم لأن الجداول والتخزين تعمل من الخادم.
 
 ## النشر التجريبي على Vercel
 

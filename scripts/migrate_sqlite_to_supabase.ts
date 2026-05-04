@@ -9,6 +9,8 @@ dotenv.config();
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const bucketName = process.env.SUPABASE_ASSETS_BUCKET || "smart-editor-assets";
+const dataBucketName = process.env.SUPABASE_DATA_BUCKET || "smart-editor-data";
+const forceStorageData = process.env.SUPABASE_DATA_MODE === "storage";
 const rootDir = process.cwd();
 const dbPath = path.join(rootDir, "data", "app.db");
 const assetsDir = path.join(rootDir, "data", "assets");
@@ -24,11 +26,41 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   }
 });
 
-async function ensureBucket() {
+function isMissingSupabaseTable(error: unknown) {
+  const candidate = error as { code?: string; message?: string } | null;
+  return candidate?.code === "PGRST205" || Boolean(candidate?.message?.includes("Could not find the table"));
+}
+
+function safeStorageKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9@._-]/gi, "_");
+}
+
+function profileStoragePath(email: string) {
+  return `profiles/${safeStorageKey(email)}.json`;
+}
+
+function reportStoragePath(email: string, reportId: string) {
+  return `reports/${safeStorageKey(email)}/${safeStorageKey(reportId)}.json`;
+}
+
+async function ensureBucket(name = bucketName) {
   const { data: buckets, error: listError } = await supabase.storage.listBuckets();
   if (listError) throw listError;
-  if (buckets?.some((bucket) => bucket.name === bucketName)) return;
-  const { error } = await supabase.storage.createBucket(bucketName, { public: false });
+  if (buckets?.some((bucket) => bucket.name === name)) return;
+  const { error } = await supabase.storage.createBucket(name, { public: false });
+  if (error) throw error;
+}
+
+async function uploadJson(storagePath: string, data: unknown) {
+  await ensureBucket(dataBucketName);
+  const { error } = await supabase.storage.from(dataBucketName).upload(
+    storagePath,
+    Buffer.from(JSON.stringify(data, null, 2)),
+    {
+      contentType: "application/json; charset=utf-8",
+      upsert: true
+    }
+  );
   if (error) throw error;
 }
 
@@ -77,38 +109,75 @@ async function migrate() {
     updated_at: string;
   }>;
 
-  for (const row of profiles) {
-    const { error } = await supabase.from("profiles").upsert(
-      {
-        email: row.email,
-        data: JSON.parse(row.data),
-        updated_at: row.updated_at
-      },
-      { onConflict: "email" }
-    );
-    if (error) throw error;
+  let dataMode: "postgres" | "storage-json" = forceStorageData ? "storage-json" : "postgres";
+
+  if (dataMode === "postgres") {
+    for (const row of profiles) {
+      const { error } = await supabase.from("profiles").upsert(
+        {
+          email: row.email,
+          data: JSON.parse(row.data),
+          updated_at: row.updated_at
+        },
+        { onConflict: "email" }
+      );
+      if (error) {
+        if (isMissingSupabaseTable(error)) {
+          dataMode = "storage-json";
+          break;
+        }
+        throw error;
+      }
+    }
   }
 
-  for (const row of reports) {
-    const { error } = await supabase.from("reports").upsert(
-      {
+  if (dataMode === "postgres") {
+    for (const row of reports) {
+      const { error } = await supabase.from("reports").upsert(
+        {
+          id: row.id,
+          email: row.email,
+          title: row.title,
+          level: row.level,
+          data: JSON.parse(row.data),
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        },
+        { onConflict: "id" }
+      );
+      if (error) {
+        if (isMissingSupabaseTable(error)) {
+          dataMode = "storage-json";
+          break;
+        }
+        throw error;
+      }
+    }
+  }
+
+  if (dataMode === "storage-json") {
+    for (const row of profiles) {
+      await uploadJson(profileStoragePath(row.email), JSON.parse(row.data));
+    }
+    for (const row of reports) {
+      const report = JSON.parse(row.data);
+      await uploadJson(reportStoragePath(row.email, row.id), {
         id: row.id,
         email: row.email,
         title: row.title,
         level: row.level,
-        data: JSON.parse(row.data),
-        created_at: row.created_at,
-        updated_at: row.updated_at
-      },
-      { onConflict: "id" }
-    );
-    if (error) throw error;
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        report
+      });
+    }
   }
 
   const uploadedAssets = await uploadAssets();
   console.log(
     JSON.stringify(
       {
+        dataMode,
         migratedProfiles: profiles.length,
         migratedReports: reports.length,
         uploadedAssets
