@@ -818,6 +818,50 @@ function randomContributionOverrides(level: ImpactLevel) {
   return { high, medium: 100 - high - low, low };
 }
 
+function normalizeContributionOverrides(
+  level: ImpactLevel,
+  defaults: { high: number; medium: number; low: number },
+  aiOverrides?: Record<string, unknown>
+) {
+  const high = clampNumber(aiOverrides?.contributionHigh, 0, 100);
+  const medium = clampNumber(aiOverrides?.contributionMedium, 0, 100);
+  const low = clampNumber(aiOverrides?.contributionLow, 0, 100);
+  if (high === undefined || medium === undefined || low === undefined) {
+    return defaults;
+  }
+
+  const total = high + medium + low;
+  if (!total) {
+    return defaults;
+  }
+
+  const normalizedHigh = Math.round((high / total) * 100);
+  const normalizedMedium = Math.round((medium / total) * 100);
+  const normalizedLow = Math.max(0, 100 - normalizedHigh - normalizedMedium);
+  const candidate = { high: normalizedHigh, medium: normalizedMedium, low: normalizedLow };
+
+  const dominantKey: Record<ImpactLevel, keyof typeof candidate> = {
+    very_high: "high",
+    high: "high",
+    medium: "medium",
+    low: "low",
+    very_low: "low"
+  };
+  const dominant = dominantKey[level];
+  const dominantMinimum: Record<ImpactLevel, number> = {
+    very_high: 80,
+    high: 65,
+    medium: 35,
+    low: 30,
+    very_low: 40
+  };
+
+  if (candidate[dominant] < dominantMinimum[level]) {
+    return defaults;
+  }
+  return candidate;
+}
+
 function percentageOverridesForLevel(level: ImpactLevel, columns: BenefitColumn[], aiOverrides?: Record<string, unknown>) {
   const [min, max] = percentageRanges[level];
   const contribution = randomContributionOverrides(level);
@@ -832,15 +876,61 @@ function percentageOverridesForLevel(level: ImpactLevel, columns: BenefitColumn[
     defaults[`benefit:${column.id}`] = randomPercent(level);
   }
 
+  const contributionOverrides = normalizeContributionOverrides(level, contribution, aiOverrides);
   const next: Record<string, number> = {};
   for (const [key, fallback] of Object.entries(defaults)) {
-    if (key.startsWith("contribution")) {
-      next[key] = fallback;
-      continue;
-    }
-    next[key] = clampNumber(aiOverrides?.[key], min, max) ?? fallback;
+    const aiValue = clampNumber(aiOverrides?.[key], key.startsWith("contribution") ? 0 : min, key.startsWith("contribution") ? 100 : max);
+    next[key] = aiValue ?? fallback;
   }
+  next.contributionHigh = contributionOverrides.high;
+  next.contributionMedium = contributionOverrides.medium;
+  next.contributionLow = contributionOverrides.low;
   return next;
+}
+
+function summaryNumberOverridesFromAi(
+  payload: any,
+  input: {
+    teachers: Teacher[];
+    profile: Profile;
+  },
+  rows: ReportRow[]
+) {
+  const source = payload?.summaryNumberOverrides;
+  if (!source || typeof source !== "object") return {};
+
+  const participantsCount = clampNumber(source.participantsCount, 0, 999);
+  const totalTeachers = clampNumber(source.totalTeachers, input.teachers.length, 999);
+  const implementedLessons = clampNumber(source.implementedLessons, 0, 999);
+  const overrides: Record<string, number> = {};
+  if (totalTeachers !== undefined) {
+    overrides.totalTeachers = Math.max(totalTeachers, participantsCount ?? input.teachers.length);
+  }
+  if (participantsCount !== undefined) {
+    overrides.participantsCount = participantsCount;
+  }
+  if (implementedLessons !== undefined) {
+    overrides.implementedLessons = implementedLessons;
+  } else if (payload?.summaryNumberOverrides === true) {
+    overrides.implementedLessons = rows.reduce((sum, row) => sum + row.lessonsCount, 0);
+  }
+  return overrides;
+}
+
+function sanitizeTextList(items: unknown[], fallback: string[], maxLength: number) {
+  const seen = new Set<string>();
+  const cleaned = items
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+  if (cleaned.length) {
+    return cleaned.slice(0, maxLength);
+  }
+  return fallback.slice(0, Math.min(fallback.length, maxLength));
 }
 
 function composeReport(input: {
@@ -1037,13 +1127,16 @@ function sanitizeAiReport(payload: any, input: {
   const aiRows = Array.isArray(payload?.rows) ? payload.rows : [];
   const rows = input.teachers.map((teacher, index) => {
     const aiRow = aiRows[index] || {};
+    const aiBenefits = aiRow?.benefits && typeof aiRow.benefits === "object" ? aiRow.benefits : null;
     const benefits: Record<string, boolean> = {};
     for (const column of input.profile.benefitColumns) {
-      benefits[column.id] = Boolean(aiRow?.benefits?.[column.id]);
+      benefits[column.id] = aiBenefits ? Boolean(aiBenefits[column.id]) : Boolean(fallback.rows[index]?.benefits?.[column.id]);
     }
-    if (!Object.values(benefits).some(Boolean)) {
+    if (!aiBenefits && !Object.values(benefits).some(Boolean)) {
       Object.assign(benefits, fallback.rows[index]?.benefits || {});
     }
+    const acquiredSkills =
+      String(aiRow.acquiredSkills || "").trim() || String(fallback.rows[index]?.acquiredSkills || "").trim();
     return {
       teacherId: teacher.id,
       teacherName: teacher.name,
@@ -1051,9 +1144,15 @@ function sanitizeAiReport(payload: any, input: {
       contribution: allowedContribution(aiRow.contribution),
       effectiveness: allowedEffectiveness(aiRow.effectiveness),
       benefits,
-      acquiredSkills: String(aiRow.acquiredSkills || fallback.rows[index]?.acquiredSkills || "").slice(0, 180)
+      acquiredSkills: acquiredSkills.slice(0, 220)
     };
   });
+  const strengths = sanitizeTextList(Array.isArray(payload?.strengths) ? payload.strengths : [], fallback.strengths, 16);
+  const improvements = sanitizeTextList(
+    Array.isArray(payload?.improvements) ? payload.improvements : [],
+    fallback.improvements,
+    12
+  );
 
   const report = composeReport({
     email: input.email,
@@ -1068,13 +1167,13 @@ function sanitizeAiReport(payload: any, input: {
     benefitColumns: input.profile.benefitColumns,
     visibleColumnIds: input.profile.visibleColumnIds,
     rows,
-    strengths: Array.isArray(payload?.strengths) && payload.strengths.length ? payload.strengths.slice(0, 12) : fallback.strengths,
-    improvements:
-      Array.isArray(payload?.improvements) && payload.improvements.length ? payload.improvements.slice(0, 8) : fallback.improvements
+    strengths,
+    improvements
   });
   return {
     ...report,
-    percentageOverrides: percentageOverridesForLevel(input.level, input.profile.benefitColumns, payload?.percentageOverrides)
+    percentageOverrides: percentageOverridesForLevel(input.level, input.profile.benefitColumns, payload?.percentageOverrides),
+    summaryNumberOverrides: summaryNumberOverridesFromAi(payload, input, rows)
   };
 }
 
@@ -1094,15 +1193,23 @@ async function generateWithDeepSeek(input: {
   const system = `
 أنت وكيل لإعداد تقرير قياس أثر بعدي لنشاط تطوير مهني باللغة العربية.
 أخرج JSON صالح فقط. لا تضف شرحاً خارج JSON.
-لا تغير أسماء المعلمات ولا تضف أسماء.
+أنت المسؤول عن تعبئة التقرير كاملاً بعد أن يكتب المستخدم عنوان النشاط ويختار مستوى النسبة.
+لا تغيّر أسماء المعلمات ولا تضف أسماء ولا تحذف صفوفاً. يجب أن يكون عدد rows مساوياً تماماً لعدد teacherRows وبنفس الترتيب.
 اجعل المحتوى مناسباً لبيئة تعليم ابتدائي وبعبارات رسمية مختصرة.
 المستخدمون المستهدفون في المملكة العربية السعودية هم: مديرو ومديرات المدارس، الموجهون والموجهات الطلابيات، والمعلمون والمعلمات.
 استخدم لغة مهنية مناسبة للتقارير المدرسية السعودية، ومفردات مألوفة في بيئة وزارة التعليم مثل: نواتج التعلم، الممارسات التدريسية، البيئة الصفية، التحصيل، التقويم، الدعم، المتابعة، الإرشاد الطلابي.
 راعِ أن التقرير قد يقرأه قيادي مدرسي أو مشرف/موجه أو معلم، لذلك اجعل العبارات دقيقة، قابلة للنسخ في تقرير رسمي، ولا تذكر أنك نموذج ذكاء اصطناعي.
 اجعل نقاط القوة تعكس الأثر الإيجابي للنشاط على الممارسات أو الدعم المدرسي، واجعل فرص التحسين عملية وقابلة للتنفيذ داخل المدرسة.
-حقل contribution يقبل قيمتين فقط: "تساهم بدرجة عالية" أو "تساهم بدرجة متوسطة".
-اكتب نقاط القوة وفرص التحسين بناءً على عنوان النشاط، ولا تجعلها عامة جداً.
-اكتب percentageOverrides كنسب عشوائية من 0 إلى 100 ضمن النطاق المطلوب للدرجة المختارة.
+املأ جدول تقييم المعلمات لكل معلمة: عدد الدروس، مساهمة النشاط، فعالية الأساليب، علامات مجالات الاستفادة، والمهارة المكتسبة.
+حقل contribution يقبل قيمتين فقط: "تساهم بدرجة عالية" أو "تساهم بدرجة متوسطة". لا تستخدم أي صيغة أخرى.
+حقل effectiveness يقبل: "فاعلة بدرجة عالية" أو "فاعلة بدرجة متوسطة" أو "فاعلة بدرجة منخفضة".
+اكتب عدداً مناسباً من strengths و improvements حسب عنوان النشاط ومستوى النسبة؛ ليس مطلوباً عدداً ثابتاً.
+يمكن أن تكون نقاط القوة وفرص التحسين أقل أو أكثر حسب الحاجة، لكن اجعل كل عبارة قصيرة ومناسبة لخلية جدول.
+اكتب نقاط القوة وفرص التحسين بناءً على عنوان النشاط مباشرة، ولا تجعلها عامة جداً، ولا تكرر العبارات.
+اكتب percentageOverrides لكل المفاتيح المطلوبة. النسب تكون عشوائية ومتناسبة مع مستوى النسبة المختار.
+اجعل contributionHigh و contributionMedium و contributionLow مجموعها 100.
+استخدم مفاتيح benefitColumns كما هي تماماً داخل benefits و percentageOverrides.
+summaryNumberOverrides اختياري، وإن كتبته فليكن متسقاً مع عدد المعلمات وعدد الدروس.
 صيغة JSON:
 {
   "rows": [
@@ -1118,8 +1225,16 @@ async function generateWithDeepSeek(input: {
   "improvements": ["نص"],
   "percentageOverrides": {
     "attendance": 92,
+    "contributionHigh": 92,
+    "contributionMedium": 8,
+    "contributionLow": 0,
     "effectiveness": 91,
     "benefit:subject": 93
+  },
+  "summaryNumberOverrides": {
+    "totalTeachers": 32,
+    "participantsCount": 26,
+    "implementedLessons": 52
   }
 }`.trim();
   const user = {
@@ -1129,11 +1244,21 @@ async function generateWithDeepSeek(input: {
     allowedPercentageRange: percentageRanges[input.level],
     percentageOverrideKeys: [
       "attendance",
+      "contributionHigh",
+      "contributionMedium",
+      "contributionLow",
       "effectiveness",
       ...input.profile.benefitColumns.map((column) => `benefit:${column.id}`)
     ],
+    summaryNumberKeys: ["totalTeachers", "participantsCount", "implementedLessons"],
+    schoolSettings: input.profile.schoolSettings,
     benefitColumns: input.profile.benefitColumns,
-    teacherNames: input.teachers.map((teacher) => teacher.name)
+    visibleColumnIds: input.profile.visibleColumnIds,
+    teacherRows: input.teachers.map((teacher, index) => ({
+      index: index + 1,
+      teacherId: teacher.id,
+      teacherName: teacher.name
+    }))
   };
 
   const body: Record<string, unknown> = {
@@ -1144,7 +1269,7 @@ async function generateWithDeepSeek(input: {
     ],
     response_format: { type: "json_object" },
     temperature: 0.9,
-    max_tokens: 5000
+    max_tokens: 8000
   };
   if (model.startsWith("deepseek-v4")) {
     body.thinking = { type: "disabled" };
