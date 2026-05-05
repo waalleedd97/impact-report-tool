@@ -422,7 +422,6 @@ function EditableSummaryText({
         event.stopPropagation();
         selectTextTarget(event.currentTarget, styleKey, defaults, onSelectText);
       }}
-      onInput={() => onChange(readValue(), false)}
       onBlur={() => onChange(readValue().trim(), true)}
       title="اضغط للتعديل اليدوي"
     >
@@ -520,7 +519,6 @@ function EditableSkillsText({
       tabIndex={0}
       aria-label={label}
       onPointerDown={(event) => event.stopPropagation()}
-      onInput={() => onChange(readValue(), false)}
       onBlur={() => onChange(readValue(), true)}
     >
       {value}
