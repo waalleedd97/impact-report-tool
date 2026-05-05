@@ -1320,12 +1320,22 @@ button:disabled {
   padding: 0.3mm;
 }
 
-.vertical-head span {
+.vertical-head .vertical-head-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 24mm;
   font-size: 5.3pt;
   line-height: 1.1;
+}
+
+.vertical-head .summary-edit-target {
+  display: inline;
+  width: auto;
+  min-height: 0;
+  line-height: inherit;
 }
 
 .check-cell {

@@ -1649,6 +1649,17 @@ function DetailPage({
     if (!onReportChange) return;
     onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
   };
+  const updateBenefitColumnLabel = (columnId: string, label: string, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange(
+      {
+        benefitColumns: report.benefitColumns.map((column) =>
+          column.id === columnId ? { ...column, label: label.trim() || column.label } : column
+        )
+      },
+      { persist }
+    );
+  };
   const updateReportTitle = (reportTitle: string, persist = true) => {
     if (!onReportChange) return;
     onReportChange({ reportTitle: reportTitle.trim() || defaultReportTitle(report.courseTitle) }, { persist });
@@ -1776,7 +1787,14 @@ function DetailPage({
           <tr>
             {columns.map((column) => (
               <th className="vertical-head" key={column.id}>
-                <span>{text(`head-benefit-${column.id}`, column.label, { ...headDefaults, fontSizePt: 5.3 })}</span>
+                <span className="vertical-head-label">
+                  {editableHeader(
+                    `head-benefit-${column.id}`,
+                    column.label,
+                    { ...headDefaults, fontSizePt: 5.3 },
+                    (label, persist) => updateBenefitColumnLabel(column.id, label, persist)
+                  )}
+                </span>
               </th>
             ))}
           </tr>
