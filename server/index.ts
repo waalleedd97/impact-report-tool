@@ -1234,12 +1234,10 @@ function ensurePdfJsDomPolyfills() {
 
 async function loadPdfJs() {
   ensurePdfJsDomPolyfills();
-  const [pdfjsLib, pdfjsWorker] = await Promise.all([
-    (pdfJsImportPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs")),
-    (pdfJsWorkerImportPromise ||= import("pdfjs-dist/legacy/build/pdf.worker.mjs"))
-  ]);
+  const pdfjsWorker = await (pdfJsWorkerImportPromise ||= import("pdfjs-dist/legacy/build/pdf.worker.mjs"));
   (globalThis as any).pdfjsWorker ||= pdfjsWorker;
-  return pdfjsLib;
+  pdfJsImportPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs");
+  return pdfJsImportPromise;
 }
 
 async function extractPdfPageTexts(pdfPath: string) {
