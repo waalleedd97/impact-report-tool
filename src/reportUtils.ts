@@ -99,6 +99,10 @@ function activityTitle(courseTitle: string) {
   return courseTitle.trim() || "النشاط";
 }
 
+function defaultReportTitle(courseTitle: string) {
+  return `تقرير قياس أثر بعدي لنشاط تطوير مهني (${activityTitle(courseTitle)})`;
+}
+
 function contributionLabelForCourse(courseTitle: string) {
   return `مدى مساهمة ${activityTitle(courseTitle)} في تطوير أدائك التدريسي`;
 }
@@ -280,6 +284,7 @@ export function composeReport(input: {
     id: input.id,
     email: input.email,
     courseTitle: input.courseTitle,
+    reportTitle: defaultReportTitle(input.courseTitle),
     level: input.level,
     createdAt: now,
     updatedAt: now,

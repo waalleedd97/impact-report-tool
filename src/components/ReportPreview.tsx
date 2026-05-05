@@ -1134,6 +1134,10 @@ function formatPercent(value: number) {
   return `%${Number.isFinite(value) ? value : 0}`;
 }
 
+function defaultReportTitle(courseTitle: string) {
+  return `تقرير قياس أثر بعدي لنشاط تطوير مهني (${courseTitle.trim() || "النشاط"})`;
+}
+
 function visibleColumns(report: Report) {
   return report.benefitColumns.filter((column) => report.visibleColumnIds.includes(column.id));
 }
@@ -1269,6 +1273,10 @@ function SummaryPage({
     if (!onReportChange) return;
     onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
   };
+  const updateReportTitle = (reportTitle: string, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange({ reportTitle: reportTitle.trim() || defaultReportTitle(report.courseTitle) }, { persist });
+  };
   const columns = visibleColumns(report);
   const summaryRegion = smartTemplate.tableRegions.summary;
   const strengthsRegion = smartTemplate.tableRegions.strengths;
@@ -1310,7 +1318,7 @@ function SummaryPage({
       onPrintSettingsChange={onPrintSettingsChange}
     >
       <h1 className="report-title">
-        {text("title", `تقرير قياس أثر بعدي لنشاط تطوير مهني (${report.courseTitle})`, titleDefaults)}
+        {editableSummary("title", report.reportTitle || defaultReportTitle(report.courseTitle), titleDefaults, updateReportTitle)}
       </h1>
       <table className="summary-table" style={regionStyle(summaryRegion)}>
         <colgroup>
@@ -1518,6 +1526,10 @@ function DetailPage({
     if (!onReportChange) return;
     onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
   };
+  const updateReportTitle = (reportTitle: string, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange({ reportTitle: reportTitle.trim() || defaultReportTitle(report.courseTitle) }, { persist });
+  };
   const editableHeader = (
     styleKey: string,
     value: string,
@@ -1585,7 +1597,12 @@ function DetailPage({
       onPrintSettingsChange={onPrintSettingsChange}
     >
       <h1 className="report-title detail-title">
-        {text("title", `${pageIndex === 0 ? "تابع " : ""}تقرير قياس أثر بعدي لنشاط تطوير مهني (${report.courseTitle})`, titleDefaults)}
+        {editableHeader(
+          "title",
+          `${pageIndex === 0 ? "تابع " : ""}${report.reportTitle || defaultReportTitle(report.courseTitle)}`,
+          titleDefaults,
+          (value, persist) => updateReportTitle(value.replace(/^تابع\s+/, ""), persist)
+        )}
       </h1>
       <table className="details-table" style={regionStyle(detailRegion)}>
         <colgroup>

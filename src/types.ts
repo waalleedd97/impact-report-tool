@@ -154,6 +154,7 @@ export type Report = {
   id: string;
   email: string;
   courseTitle: string;
+  reportTitle?: string;
   level: ImpactLevel;
   createdAt: string;
   updatedAt: string;
@@ -175,6 +176,7 @@ export type GenerationOptions = {
   strengthCount?: number;
   improvementCount?: number;
   notes?: string;
+  reportTitle?: string;
 };
 
 export type SubscriptionSession = {

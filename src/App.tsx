@@ -114,6 +114,10 @@ function safeFilename(value: string) {
   return value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ") || "report";
 }
 
+function defaultReportTitle(courseTitle: string) {
+  return `تقرير قياس أثر بعدي لنشاط تطوير مهني (${courseTitle.trim() || "النشاط"})`;
+}
+
 function normalizePrintSettings(...settings: Array<Partial<PrintSettings> | undefined>): PrintSettings {
   let merged: PrintSettings = {
     ...defaultPrintSettings,
@@ -169,6 +173,7 @@ function normalizeReport(
 ): Report {
   return {
     ...report,
+    reportTitle: report.reportTitle || defaultReportTitle(report.courseTitle),
     printSettings: normalizePrintSettings(fallbackPrintSettings, report.printSettings),
     smartTemplate: report.smartTemplate || fallbackSmartTemplate,
     percentageOverrides: { ...report.percentageOverrides },
@@ -417,6 +422,14 @@ export default function App() {
       if (agentNotes.trim()) {
         generationOptions.notes = agentNotes.trim();
       }
+      const customReportTitle =
+        profile.currentReport?.reportTitle &&
+        profile.currentReport.reportTitle !== defaultReportTitle(profile.currentReport.courseTitle)
+          ? profile.currentReport.reportTitle
+          : "";
+      if (customReportTitle.trim()) {
+        generationOptions.reportTitle = customReportTitle.trim();
+      }
       const result = await generateReport(
         {
           email: profile.email,
@@ -553,7 +566,7 @@ export default function App() {
         pdf.addImage(image, "JPEG", 0, 0, 210, 297);
       }
 
-      pdf.save(`${safeFilename(profile.currentReport.courseTitle)}.pdf`);
+      pdf.save(`${safeFilename(profile.currentReport.reportTitle || profile.currentReport.courseTitle)}.pdf`);
       setMessage("تم تنزيل ملف PDF");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر تصدير PDF");
@@ -800,6 +813,16 @@ export default function App() {
               عنوان النشاط
               <input value={courseTitle} onChange={(event) => setCourseTitle(event.target.value)} />
             </label>
+            {currentReport ? (
+              <label>
+                عنوان التقرير كامل
+                <input
+                  value={currentReport.reportTitle || defaultReportTitle(currentReport.courseTitle)}
+                  onChange={(event) => applyReportPatch({ reportTitle: event.target.value }, { persist: false })}
+                  onBlur={(event) => applyReportPatch({ reportTitle: event.target.value })}
+                />
+              </label>
+            ) : null}
             <div className="field-group">
               <span>مستوى النسبة</span>
               <div className="segmented level-segmented">
