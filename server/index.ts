@@ -858,8 +858,12 @@ async function renewSubscriptionRecord(expiredCodeInput: unknown, newCodeInput: 
   return savedNewSubscription;
 }
 
-async function requireSubscriptionAccess(req: express.Request, accountId: string) {
-  const headerValue = req.headers["x-subscription-code"];
+type HeaderCarrier = {
+  get?: (name: string) => string | string[] | undefined;
+};
+
+async function requireSubscriptionAccess(req: HeaderCarrier, accountId: string) {
+  const headerValue = req.get?.("x-subscription-code");
   const code = normalizeSubscriptionCode(Array.isArray(headerValue) ? headerValue[0] : headerValue);
   const subscription = await activateOrLoadSubscription(code);
   if (subscription.accountId !== accountId) {
