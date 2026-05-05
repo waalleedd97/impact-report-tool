@@ -139,10 +139,13 @@ export type ReportSummary = {
   participantsCount: number;
   attendancePercentage: number;
   implementedLessons: number;
+  implementedLessonsLabel?: string;
   impactSummary: string;
   contributionLabel?: string;
   effectivenessLabel?: string;
   benefitsHeaderLabel?: string;
+  detailLessonsCountLabel?: string;
+  acquiredSkillsLabel?: string;
   contributionHighPercent: number;
   contributionMediumPercent: number;
   contributionLowPercent: number;

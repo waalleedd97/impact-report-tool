@@ -1138,6 +1138,105 @@ function defaultReportTitle(courseTitle: string) {
   return `تقرير قياس أثر بعدي لنشاط تطوير مهني (${courseTitle.trim() || "النشاط"})`;
 }
 
+function extractActivityTitleFromReportTitle(reportTitle?: string) {
+  const title = String(reportTitle || "").replace(/\s+/g, " ").trim();
+  if (!title) return "";
+
+  const parenthesized = title.match(/[(（]([^()（）]+)[)）]\s*$/);
+  if (parenthesized?.[1]?.trim()) {
+    return parenthesized[1].trim();
+  }
+
+  const withoutFollowUpPrefix = title.replace(/^تقرير\s+متابعة\s+/u, "").trim();
+  if (withoutFollowUpPrefix && withoutFollowUpPrefix !== title) {
+    return withoutFollowUpPrefix;
+  }
+
+  return title;
+}
+
+function activityTitleForReport(report: Report) {
+  return (
+    extractActivityTitleFromReportTitle(report.reportTitle) ||
+    extractActivityTitleFromReportTitle(report.courseTitle) ||
+    "النشاط"
+  );
+}
+
+function isAppliedLessonsActivity(title: string) {
+  return title.includes("الدروس التطبيقية");
+}
+
+function staleAppliedLessonsLabel(label: string | undefined, activityTitle: string) {
+  return Boolean(label && !isAppliedLessonsActivity(activityTitle) && label.includes("الدروس التطبيقية"));
+}
+
+function reportLabel(report: Report, key: keyof Report["summary"], fallback: string) {
+  const activityTitle = activityTitleForReport(report);
+  const value = report.summary[key];
+  const text = typeof value === "string" ? value : "";
+  return staleAppliedLessonsLabel(text, activityTitle) ? fallback : text || fallback;
+}
+
+function implementedLessonsLabelForReport(report: Report) {
+  const title = activityTitleForReport(report);
+  if (isAppliedLessonsActivity(title)) {
+    return "عدد الدروس التطبيقية المنفذة بالمدرسة";
+  }
+  return `عدد مرات تنفيذ ${title} بالمدرسة`;
+}
+
+function detailLessonsCountLabelForReport(report: Report) {
+  const title = activityTitleForReport(report);
+  if (isAppliedLessonsActivity(title)) {
+    return "عدد الدروس التطبيقية التي حضرتها";
+  }
+  return `عدد مرات حضور ${title}`;
+}
+
+function contributionLabelForReport(report: Report) {
+  const title = activityTitleForReport(report);
+  if (isAppliedLessonsActivity(title)) {
+    return `مدى مساهمة ${title} في تطوير أدائك التدريسي`;
+  }
+  return `مدى مساهمة ${title} في تطوير الأداء المهني`;
+}
+
+function effectivenessLabelForReport(report: Report) {
+  return `مدى فعالية الأساليب المستخدمة في تنفيذ ${activityTitleForReport(report)}`;
+}
+
+function benefitsHeaderLabelForReport(report: Report) {
+  return `حددي المجالات التي استفدت منها في ${activityTitleForReport(report)}`;
+}
+
+function acquiredSkillsLabelForReport(report: Report) {
+  const title = activityTitleForReport(report);
+  if (isAppliedLessonsActivity(title)) {
+    return "المهارات والقدرات المكتسبة التي نفذتها بعد حضور الدروس التطبيقية";
+  }
+  return `المهارات والقدرات المكتسبة التي نفذتها بعد حضور ${title}`;
+}
+
+const impactDegreeByLevel = {
+  very_high: "مرتفعة جداً",
+  high: "عالية",
+  medium: "متوسطة",
+  low: "منخفضة",
+  very_low: "منخفضة جداً"
+} as const;
+
+function impactSummaryForReport(report: Report) {
+  const title = activityTitleForReport(report);
+  if (report.level === "low") {
+    return `تحتاج ${title} إلى دعم أكبر لرفع أثرها على الممارسات المهنية`;
+  }
+  if (report.level === "very_low") {
+    return `تحتاج ${title} إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات المهنية`;
+  }
+  return `تُسهم ${title} في تحسين وتطوير الممارسات المهنية بدرجة ${impactDegreeByLevel[report.level]}`;
+}
+
 function visibleColumns(report: Report) {
   return report.benefitColumns.filter((column) => report.visibleColumnIds.includes(column.id));
 }
@@ -1288,12 +1387,17 @@ function SummaryPage({
   const splitC = Math.max(1, dataSpan - splitA - splitB);
   const halfA = Math.max(1, Math.floor(dataSpan / 2));
   const halfB = Math.max(1, dataSpan - halfA - 1);
-  const contributionLabel =
-    report.summary.contributionLabel || `مدى مساهمة ${report.courseTitle || "النشاط"} في تطوير أدائك التدريسي`;
-  const effectivenessLabel =
-    report.summary.effectivenessLabel || `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${report.courseTitle || "النشاط"}`;
-  const benefitsHeaderLabel =
-    report.summary.benefitsHeaderLabel || `حددي المجالات التي استفدت منها في ${report.courseTitle || "النشاط"}`;
+  const implementedLessonsLabel = reportLabel(
+    report,
+    "implementedLessonsLabel",
+    implementedLessonsLabelForReport(report)
+  );
+  const impactSummary = staleAppliedLessonsLabel(report.summary.impactSummary, activityTitleForReport(report))
+    ? impactSummaryForReport(report)
+    : report.summary.impactSummary;
+  const contributionLabel = reportLabel(report, "contributionLabel", contributionLabelForReport(report));
+  const effectivenessLabel = reportLabel(report, "effectivenessLabel", effectivenessLabelForReport(report));
+  const benefitsHeaderLabel = reportLabel(report, "benefitsHeaderLabel", benefitsHeaderLabelForReport(report));
   const updateBenefitColumnLabel = (columnId: string, label: string, persist = true) => {
     if (!onReportChange) return;
     onReportChange(
@@ -1343,15 +1447,22 @@ function SummaryPage({
             <td colSpan={halfB}>{percent("attendance", "النسبة", report.summary.attendancePercentage)}</td>
           </tr>
           <tr>
-            <th>{text("summary-head-lessons", "عدد الدروس التطبيقية المنفذة بالمدرسة", labelDefaults)}</th>
+            <th>
+              {editableSummary(
+                "summary-head-lessons",
+                implementedLessonsLabel,
+                labelDefaults,
+                (implementedLessonsLabel, persist) => updateSummary({ implementedLessonsLabel }, persist)
+              )}
+            </th>
             <td colSpan={dataSpan}>
-              {number("implementedLessons", "عدد الدروس التطبيقية المنفذة بالمدرسة", report.summary.implementedLessons, 0, 500)}
+              {number("implementedLessons", implementedLessonsLabel, report.summary.implementedLessons, 0, 500)}
             </td>
           </tr>
           <tr>
             <th>{text("summary-head-impact", "ملخص نتائج قياس الأثر", labelDefaults)}</th>
             <td colSpan={dataSpan}>
-              {editableSummary("summary-value-impact", report.summary.impactSummary, bodyDefaults, (impactSummary, persist) =>
+              {editableSummary("summary-value-impact", impactSummary, bodyDefaults, (impactSummary, persist) =>
                 updateSummary({ impactSummary }, persist)
               )}
             </td>
@@ -1516,12 +1627,15 @@ function DetailPage({
   const benefitWidths = benefitColumnWidths(columns);
   const detailRegion = smartTemplate.tableRegions.details;
   const start = pageIndex * rowsPerPage;
-  const contributionLabel =
-    report.summary.contributionLabel || `مدى مساهمة ${report.courseTitle || "النشاط"} في تطوير أدائك التدريسي`;
-  const effectivenessLabel =
-    report.summary.effectivenessLabel || `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${report.courseTitle || "النشاط"}`;
-  const benefitsHeaderLabel =
-    report.summary.benefitsHeaderLabel || `حددي المجالات التي استفدت منها في ${report.courseTitle || "النشاط"}`;
+  const detailLessonsCountLabel = reportLabel(
+    report,
+    "detailLessonsCountLabel",
+    detailLessonsCountLabelForReport(report)
+  );
+  const contributionLabel = reportLabel(report, "contributionLabel", contributionLabelForReport(report));
+  const effectivenessLabel = reportLabel(report, "effectivenessLabel", effectivenessLabelForReport(report));
+  const benefitsHeaderLabel = reportLabel(report, "benefitsHeaderLabel", benefitsHeaderLabelForReport(report));
+  const acquiredSkillsLabel = reportLabel(report, "acquiredSkillsLabel", acquiredSkillsLabelForReport(report));
   const updateSummary = (patch: Partial<Report["summary"]>, persist = true) => {
     if (!onReportChange) return;
     onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
@@ -1625,7 +1739,9 @@ function DetailPage({
               {text("head-name", "الاسم", headDefaults)}
             </th>
             <th rowSpan={2} className="lessons-cell">
-              {text("head-lessons", "عدد الدروس التطبيقية التي حضرتها", headDefaults)}
+              {editableHeader("head-lessons", detailLessonsCountLabel, headDefaults, (detailLessonsCountLabel, persist) =>
+                updateSummary({ detailLessonsCountLabel }, persist)
+              )}
             </th>
             <th rowSpan={2} className="rating-cell contribution-cell">
               {editableHeader("head-contribution", contributionLabel, headDefaults, (contributionLabel, persist) =>
@@ -1643,7 +1759,9 @@ function DetailPage({
               )}
             </th>
             <th rowSpan={2} className="skills-cell">
-              {text("head-skills", "المهارات والقدرات المكتسبة التي نفذتها بعد حضور الدروس التطبيقية", headDefaults)}
+              {editableHeader("head-skills", acquiredSkillsLabel, headDefaults, (acquiredSkillsLabel, persist) =>
+                updateSummary({ acquiredSkillsLabel }, persist)
+              )}
             </th>
           </tr>
           <tr>
@@ -1671,7 +1789,7 @@ function DetailPage({
                     max={999}
                     step={1}
                     value={row.lessonsCount}
-                    aria-label={`عدد الدروس التطبيقية التي حضرتها - ${row.teacherName}`}
+                    aria-label={`${detailLessonsCountLabel} - ${row.teacherName}`}
                     onPointerDown={(event) => event.stopPropagation()}
                     onChange={(event) => updateLessonsCount(absoluteIndex, Number(event.currentTarget.value))}
                     onBlur={(event) => updateLessonsCount(absoluteIndex, Number(event.currentTarget.value))}
@@ -1681,7 +1799,7 @@ function DetailPage({
                   <select
                     className="contribution-select"
                     value={contribution}
-                    aria-label={`مدى مساهمة الدروس التطبيقية - ${row.teacherName}`}
+                    aria-label={`${contributionLabel} - ${row.teacherName}`}
                     onPointerDown={(event) => event.stopPropagation()}
                     onChange={(event) => updateContribution(absoluteIndex, event.currentTarget.value)}
                   >

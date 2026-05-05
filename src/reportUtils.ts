@@ -95,35 +95,85 @@ function randomPercent(level: ImpactLevel) {
   return randomInt(min, max);
 }
 
-function activityTitle(courseTitle: string) {
-  return courseTitle.trim() || "النشاط";
+function extractActivityTitleFromReportTitle(reportTitle?: string) {
+  const title = String(reportTitle || "").replace(/\s+/g, " ").trim();
+  if (!title) return "";
+
+  const parenthesized = title.match(/[(（]([^()（）]+)[)）]\s*$/);
+  if (parenthesized?.[1]?.trim()) {
+    return parenthesized[1].trim();
+  }
+
+  const withoutFollowUpPrefix = title.replace(/^تقرير\s+متابعة\s+/u, "").trim();
+  if (withoutFollowUpPrefix && withoutFollowUpPrefix !== title) {
+    return withoutFollowUpPrefix;
+  }
+
+  return title;
+}
+
+function activityTitle(courseTitle: string, reportTitle?: string) {
+  return extractActivityTitleFromReportTitle(reportTitle) || extractActivityTitleFromReportTitle(courseTitle) || "النشاط";
+}
+
+function isAppliedLessonsActivity(title: string) {
+  return title.includes("الدروس التطبيقية");
 }
 
 function defaultReportTitle(courseTitle: string) {
   return `تقرير قياس أثر بعدي لنشاط تطوير مهني (${activityTitle(courseTitle)})`;
 }
 
-function contributionLabelForCourse(courseTitle: string) {
-  return `مدى مساهمة ${activityTitle(courseTitle)} في تطوير أدائك التدريسي`;
+function implementedLessonsLabelForCourse(courseTitle: string, reportTitle?: string) {
+  const title = activityTitle(courseTitle, reportTitle);
+  if (isAppliedLessonsActivity(title)) {
+    return "عدد الدروس التطبيقية المنفذة بالمدرسة";
+  }
+  return `عدد مرات تنفيذ ${title} بالمدرسة`;
 }
 
-function effectivenessLabelForCourse(courseTitle: string) {
-  return `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${activityTitle(courseTitle)}`;
+function detailLessonsCountLabelForCourse(courseTitle: string, reportTitle?: string) {
+  const title = activityTitle(courseTitle, reportTitle);
+  if (isAppliedLessonsActivity(title)) {
+    return "عدد الدروس التطبيقية التي حضرتها";
+  }
+  return `عدد مرات حضور ${title}`;
 }
 
-function benefitsHeaderLabelForCourse(courseTitle: string) {
-  return `حددي المجالات التي استفدت منها في ${activityTitle(courseTitle)}`;
+function contributionLabelForCourse(courseTitle: string, reportTitle?: string) {
+  const title = activityTitle(courseTitle, reportTitle);
+  if (isAppliedLessonsActivity(title)) {
+    return `مدى مساهمة ${title} في تطوير أدائك التدريسي`;
+  }
+  return `مدى مساهمة ${title} في تطوير الأداء المهني`;
+}
+
+function effectivenessLabelForCourse(courseTitle: string, reportTitle?: string) {
+  return `مدى فعالية الأساليب المستخدمة في تنفيذ ${activityTitle(courseTitle, reportTitle)}`;
+}
+
+function benefitsHeaderLabelForCourse(courseTitle: string, reportTitle?: string) {
+  return `حددي المجالات التي استفدت منها في ${activityTitle(courseTitle, reportTitle)}`;
+}
+
+function acquiredSkillsLabelForCourse(courseTitle: string, reportTitle?: string) {
+  const title = activityTitle(courseTitle, reportTitle);
+  if (isAppliedLessonsActivity(title)) {
+    return "المهارات والقدرات المكتسبة التي نفذتها بعد حضور الدروس التطبيقية";
+  }
+  return `المهارات والقدرات المكتسبة التي نفذتها بعد حضور ${title}`;
 }
 
 function impactSummaryForCourse(courseTitle: string, level: ImpactLevel) {
   const title = activityTitle(courseTitle);
+  const practiceLabel = isAppliedLessonsActivity(title) ? "الممارسات التدريسية" : "الممارسات المهنية";
   if (level === "low") {
-    return `تحتاج ${title} إلى دعم أكبر لرفع أثرها على الممارسات التدريسية`;
+    return `تحتاج ${title} إلى دعم أكبر لرفع أثرها على ${practiceLabel}`;
   }
   if (level === "very_low") {
-    return `تحتاج ${title} إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات التدريسية`;
+    return `تحتاج ${title} إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على ${practiceLabel}`;
   }
-  return `تُسهم ${title} في تحسين وتطوير الممارسات التدريسية بدرجة ${impactDegreeByLevel[level]}`;
+  return `تُسهم ${title} في تحسين وتطوير ${practiceLabel} بدرجة ${impactDegreeByLevel[level]}`;
 }
 
 function randomContributionOverrides(level: ImpactLevel) {
@@ -300,10 +350,13 @@ export function composeReport(input: {
       participantsCount,
       attendancePercentage: totalTeachers ? Math.round((participantsCount / totalTeachers) * 100) : 0,
       implementedLessons,
+      implementedLessonsLabel: implementedLessonsLabelForCourse(input.courseTitle),
       impactSummary: impactSummaryForCourse(input.courseTitle, input.level),
       contributionLabel: contributionLabelForCourse(input.courseTitle),
       effectivenessLabel: effectivenessLabelForCourse(input.courseTitle),
       benefitsHeaderLabel: benefitsHeaderLabelForCourse(input.courseTitle),
+      detailLessonsCountLabel: detailLessonsCountLabelForCourse(input.courseTitle),
+      acquiredSkillsLabel: acquiredSkillsLabelForCourse(input.courseTitle),
       contributionHighPercent: participantsCount ? Math.round((contributionHighCount / participantsCount) * 100) : 0,
       contributionMediumPercent: participantsCount ? Math.round((contributionMediumCount / participantsCount) * 100) : 0,
       contributionLowPercent: participantsCount ? Math.round((contributionLowCount / participantsCount) * 100) : 0,
