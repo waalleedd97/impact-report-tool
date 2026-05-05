@@ -178,6 +178,7 @@ export type Report = {
 export type GenerationOptions = {
   strengthCount?: number;
   improvementCount?: number;
+  benefitColumnCount?: number;
   notes?: string;
   reportTitle?: string;
 };

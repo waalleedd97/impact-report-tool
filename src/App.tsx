@@ -238,6 +238,7 @@ export default function App() {
   const [level, setLevel] = useState<ImpactLevel>("high");
   const [strengthCount, setStrengthCount] = useState("");
   const [improvementCount, setImprovementCount] = useState("");
+  const [benefitColumnCount, setBenefitColumnCount] = useState("");
   const [agentNotes, setAgentNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"report" | "teachers" | "settings" | "saved">("report");
   const [reports, setReports] = useState<StoredReportMeta[]>([]);
@@ -413,11 +414,15 @@ export default function App() {
       const generationOptions: GenerationOptions = {};
       const parsedStrengthCount = Number(strengthCount);
       const parsedImprovementCount = Number(improvementCount);
+      const parsedBenefitColumnCount = Number(benefitColumnCount);
       if (Number.isFinite(parsedStrengthCount) && parsedStrengthCount > 0) {
         generationOptions.strengthCount = Math.round(parsedStrengthCount);
       }
       if (Number.isFinite(parsedImprovementCount) && parsedImprovementCount > 0) {
         generationOptions.improvementCount = Math.round(parsedImprovementCount);
+      }
+      if (Number.isFinite(parsedBenefitColumnCount) && parsedBenefitColumnCount > 0) {
+        generationOptions.benefitColumnCount = Math.round(parsedBenefitColumnCount);
       }
       if (agentNotes.trim()) {
         generationOptions.notes = agentNotes.trim();
@@ -441,9 +446,11 @@ export default function App() {
         },
         subscription?.code || ""
       );
+      const nextReport = normalizeReport(result.report, profile.printSettings, activeSmartTemplate(profile));
       const nextProfile = {
         ...profile,
-        currentReport: normalizeReport(result.report, profile.printSettings, activeSmartTemplate(profile))
+        visibleColumnIds: nextReport.visibleColumnIds,
+        currentReport: nextReport
       };
       await persistProfile(nextProfile);
       setMessage("تم توليد التقرير عبر الذكاء الاصطناعي");
@@ -863,6 +870,17 @@ export default function App() {
                     value={improvementCount}
                     onChange={(event) => setImprovementCount(event.target.value)}
                     placeholder="الوكيل يحدد"
+                  />
+                </label>
+                <label>
+                  عدد مجالات الاستفادة
+                  <input
+                    type="number"
+                    min={1}
+                    max={profile.benefitColumns.length}
+                    value={benefitColumnCount}
+                    onChange={(event) => setBenefitColumnCount(event.target.value)}
+                    placeholder={`${profile.benefitColumns.length} كحد أقصى`}
                   />
                 </label>
               </div>
