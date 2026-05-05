@@ -1223,6 +1223,7 @@ class PdfImportPath2D {
 }
 
 let pdfJsImportPromise: Promise<any> | undefined;
+let pdfJsWorkerImportPromise: Promise<any> | undefined;
 
 function ensurePdfJsDomPolyfills() {
   const global = globalThis as any;
@@ -1233,8 +1234,12 @@ function ensurePdfJsDomPolyfills() {
 
 async function loadPdfJs() {
   ensurePdfJsDomPolyfills();
-  pdfJsImportPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs");
-  return pdfJsImportPromise;
+  const [pdfjsLib, pdfjsWorker] = await Promise.all([
+    (pdfJsImportPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs")),
+    (pdfJsWorkerImportPromise ||= import("pdfjs-dist/legacy/build/pdf.worker.mjs"))
+  ]);
+  (globalThis as any).pdfjsWorker ||= pdfjsWorker;
+  return pdfjsLib;
 }
 
 async function extractPdfPageTexts(pdfPath: string) {
