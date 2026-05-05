@@ -4,12 +4,16 @@ import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream } from "pdf-lib";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { PNG } from "pngjs";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 dotenv.config();
 
@@ -238,6 +242,12 @@ type SubscriptionSession = {
   accountId: string;
   expiresAt: string;
   daysRemaining: number;
+};
+
+type ImportedPdf = {
+  teachers: Teacher[];
+  templateAssets: TemplateAssets;
+  schoolSettings: Partial<SchoolSettings>;
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -962,7 +972,12 @@ async function saveTemplateAsset(profileKey: string, filename: string, localFile
   const storagePath = `${profileKey}/${safeFilename}`;
   if (supabase) {
     await ensureSupabaseAssetsBucket();
-    const contentType = safeFilename.toLowerCase().endsWith(".png") ? "image/png" : "application/octet-stream";
+    const lowerFilename = safeFilename.toLowerCase();
+    const contentType = lowerFilename.endsWith(".png")
+      ? "image/png"
+      : lowerFilename.endsWith(".jpg") || lowerFilename.endsWith(".jpeg")
+        ? "image/jpeg"
+        : "application/octet-stream";
     const { error } = await supabase.storage
       .from(supabaseAssetsBucket)
       .upload(storagePath, await fsp.readFile(localFilePath), {
@@ -976,17 +991,306 @@ async function saveTemplateAsset(profileKey: string, filename: string, localFile
   return assetUrl(storagePath);
 }
 
-function runPythonImport(pdfPath: string, profileAssetDir: string): Promise<{
-  teachers: Teacher[];
-  templateAssets: TemplateAssets;
-  schoolSettings: Partial<SchoolSettings>;
-}> {
+function normalizeImportedArabic(value: string) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/اال/g, "الا")
+    .replace(/اإ/g, "الإ")
+    .replace(/اأ/g, "الأ")
+    .replace(/اآ/g, "الآ")
+    .replace(/امل/g, "الم")
+    .replace(/\bع\s*بدهللا\b/g, "عبدالله")
+    .replace(/\bعبدهللا\b/g, "عبدالله")
+    .replace(/([\u0621-\u064A])\s+([ىي])\b/g, "$1$2");
+}
+
+function cleanImportedText(value: string) {
+  return normalizeImportedArabic(value).replace(/\s+/g, " ").trim().replace(" ى", "ى").replace(" ي", "ي");
+}
+
+function normalizeImportedSearchText(value: string) {
+  return normalizeImportedArabic(value)
+    .replace(/\r/g, "\n")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function makeImportedTeacher(name: string, index: number): Teacher {
+  return {
+    id: `teacher-${index}`,
+    name: cleanImportedText(name)
+  };
+}
+
+function extractImportedTeachers(text: string): Teacher[] {
+  const searchText = normalizeImportedSearchText(text);
+  const teachers: Teacher[] = [];
+  for (let index = 1; index < 150; index += 1) {
+    const pattern = new RegExp(`(?:^|\\n)\\s*${index}\\s+(.+?)\\s+\\d+\\s+تساهم`, "s");
+    const match = searchText.match(pattern);
+    if (!match) {
+      if (index > 1) break;
+      continue;
+    }
+    const name = cleanImportedText(match[1] || "");
+    if (name) {
+      teachers.push(makeImportedTeacher(name, index));
+    }
+  }
+  return teachers;
+}
+
+function extractImportedSchoolSettings(text: string): Partial<SchoolSettings> {
+  const searchText = normalizeImportedSearchText(text);
+  const settings: Partial<SchoolSettings> = {};
+  if (searchText.includes("المملكة العربية السعودية")) {
+    settings.country = "المملكة العربية السعودية";
+  }
+  if (searchText.includes("وزارة التعليم")) {
+    settings.ministry = "وزارة التعليم";
+  }
+  const departmentMatch = searchText.match(/(الإدارة العامة للتعليم[^\n]+)/);
+  if (departmentMatch) {
+    settings.department = cleanImportedText(departmentMatch[1]);
+  }
+  const directSchoolMatches = [...searchText.matchAll(/(الابتدائية[^\n]+الطفولة\s*المبكرة)/g)];
+  const reversedSchoolMatches = [...searchText.matchAll(/([^\n]*الطفولة\s*المبكرة)[\s\n]+(الابتدائية[^\n]+)/g)];
+  if (directSchoolMatches.length) {
+    settings.schoolName = cleanImportedText(directSchoolMatches.at(-1)?.[1] || "");
+  } else if (reversedSchoolMatches.length) {
+    const match = reversedSchoolMatches.at(-1);
+    const schoolPrefix = cleanImportedText(match?.[2] || "");
+    const schoolSuffix = cleanImportedText(match?.[1] || "");
+    settings.schoolName = cleanImportedText(`${schoolPrefix} ${schoolSuffix}`);
+  }
+  const principalMatch = searchText.match(/مديرة\s+المدرسة\s*\/\s*([^\n]+)(?:\n\s*([ىي]))?/);
+  if (principalMatch) {
+    settings.principalName = cleanImportedText(`${principalMatch[1]}${principalMatch[2] || ""}`);
+  }
+  const totalMatch = searchText.match(/عدد\s+معلمات\s+المدرسة\s+(\d+)/);
+  if (totalMatch) {
+    settings.totalTeachers = Number(totalMatch[1]);
+  }
+  return settings;
+}
+
+async function extractPdfPageTexts(pdfPath: string) {
+  const data = await fsp.readFile(pdfPath);
+  const loadingTask = (pdfjsLib as any).getDocument({
+    data: new Uint8Array(data),
+    disableWorker: true,
+    useSystemFonts: true
+  });
+  const document = await loadingTask.promise;
+  const pageTexts: string[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = (textContent.items || [])
+        .map((item: { str?: string }) => item.str || "")
+        .filter(Boolean)
+        .join("\n");
+      pageTexts.push(pageText);
+      page.cleanup?.();
+    }
+  } finally {
+    await document.destroy?.();
+  }
+  return pageTexts;
+}
+
+function pdfNameValue(value: unknown) {
+  if (value instanceof PDFName) {
+    return value.decodeText();
+  }
+  const raw = value && typeof value === "object" && "toString" in value ? String(value) : "";
+  return raw.startsWith("/") ? raw.slice(1) : raw;
+}
+
+function pdfNumberValue(stream: PDFRawStream, key: string) {
+  const value = stream.dict.lookup(PDFName.of(key));
+  if (value instanceof PDFNumber) {
+    return value.asNumber();
+  }
+  const numeric = Number(value?.toString?.());
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function pdfFilterNames(stream: PDFRawStream) {
+  const filter = stream.dict.lookup(PDFName.of("Filter"));
+  if (!filter) return [];
+  if (filter instanceof PDFName) return [pdfNameValue(filter)];
+  if (filter instanceof PDFArray) {
+    return Array.from({ length: filter.size() })
+      .map((_, index) => pdfNameValue(filter.lookup(index)))
+      .filter(Boolean);
+  }
+  return [pdfNameValue(filter)].filter(Boolean);
+}
+
+function isFlateEncoded(stream: PDFRawStream) {
+  const filters = pdfFilterNames(stream);
+  return filters.length === 0 || filters.every((filter) => filter === "FlateDecode" || filter === "Fl");
+}
+
+function isJpegEncoded(stream: PDFRawStream) {
+  return pdfFilterNames(stream).some((filter) => filter === "DCTDecode" || filter === "DCT");
+}
+
+function decodedFlateBytes(stream: PDFRawStream) {
+  return pdfFilterNames(stream).length ? inflateSync(Buffer.from(stream.contents)) : Buffer.from(stream.contents);
+}
+
+function decodeImageMask(stream: PDFRawStream, width: number, height: number) {
+  const mask = stream.dict.lookup(PDFName.of("SMask"));
+  if (!(mask instanceof PDFRawStream) || !isFlateEncoded(mask)) return undefined;
+  const maskWidth = pdfNumberValue(mask, "Width");
+  const maskHeight = pdfNumberValue(mask, "Height");
+  const maskBits = pdfNumberValue(mask, "BitsPerComponent") || 8;
+  const colorSpace = pdfNameValue(mask.dict.lookup(PDFName.of("ColorSpace")));
+  if (maskWidth !== width || maskHeight !== height || maskBits !== 8 || colorSpace !== "DeviceGray") {
+    return undefined;
+  }
+  const rawMask = decodedFlateBytes(mask);
+  const expected = width * height;
+  return rawMask.length >= expected ? rawMask.subarray(0, expected) : undefined;
+}
+
+function pngBufferFromPdfImage(stream: PDFRawStream, width: number, height: number) {
+  const bits = pdfNumberValue(stream, "BitsPerComponent") || 8;
+  const colorSpace = pdfNameValue(stream.dict.lookup(PDFName.of("ColorSpace")));
+  if (bits !== 8 || colorSpace !== "DeviceRGB" || !isFlateEncoded(stream)) {
+    return undefined;
+  }
+  const raw = decodedFlateBytes(stream);
+  const expected = width * height * 3;
+  if (raw.length < expected) {
+    return undefined;
+  }
+  const mask = decodeImageMask(stream, width, height);
+  const png = new PNG({ width, height });
+  for (let pixel = 0, output = 0, input = 0; pixel < width * height; pixel += 1, output += 4, input += 3) {
+    png.data[output] = raw[input];
+    png.data[output + 1] = raw[input + 1];
+    png.data[output + 2] = raw[input + 2];
+    png.data[output + 3] = mask ? mask[pixel] : 255;
+  }
+  return PNG.sync.write(png);
+}
+
+type PdfImageCandidate = {
+  width: number;
+  height: number;
+  area: number;
+  extension: "png" | "jpg";
+  data: Buffer;
+};
+
+function imageCandidateFromStream(stream: PDFRawStream): PdfImageCandidate | undefined {
+  if (pdfNameValue(stream.dict.lookup(PDFName.of("Subtype"))) !== "Image") {
+    return undefined;
+  }
+  const width = pdfNumberValue(stream, "Width") || 0;
+  const height = pdfNumberValue(stream, "Height") || 0;
+  if (width <= 0 || height <= 0) {
+    return undefined;
+  }
+  if (isJpegEncoded(stream)) {
+    return {
+      width,
+      height,
+      area: width * height,
+      extension: "jpg",
+      data: Buffer.from(stream.contents)
+    };
+  }
+  const png = pngBufferFromPdfImage(stream, width, height);
+  if (!png) {
+    return undefined;
+  }
+  return {
+    width,
+    height,
+    area: width * height,
+    extension: "png",
+    data: png
+  };
+}
+
+async function extractPdfTemplateAssets(pdfPath: string, outputDir: string): Promise<TemplateAssets> {
+  await fsp.mkdir(outputDir, { recursive: true });
+  const pdf = await PDFDocument.load(await fsp.readFile(pdfPath));
+  const candidates: PdfImageCandidate[] = [];
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFRawStream) {
+      const candidate = imageCandidateFromStream(object);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+  const bestBackground = candidates.reduce<PdfImageCandidate | undefined>(
+    (best, candidate) => (!best || candidate.area > best.area ? candidate : best),
+    undefined
+  );
+  const bestSignature = candidates
+    .filter((candidate) => candidate.width >= 250 && candidate.width <= 520 && candidate.height >= 90 && candidate.height <= 220)
+    .reduce<PdfImageCandidate | undefined>(
+      (best, candidate) => (!best || candidate.area > best.area ? candidate : best),
+      undefined
+    );
+
+  const assets: TemplateAssets = {};
+  if (bestBackground) {
+    const filename = `template-background.${bestBackground.extension}`;
+    await fsp.writeFile(path.join(outputDir, filename), bestBackground.data);
+    assets.backgroundUrl = filename;
+  }
+  if (bestSignature) {
+    const filename = `signature.${bestSignature.extension}`;
+    await fsp.writeFile(path.join(outputDir, filename), bestSignature.data);
+    assets.signatureUrl = filename;
+  }
+  return assets;
+}
+
+async function runNodeImport(pdfPath: string, profileAssetDir: string): Promise<ImportedPdf> {
+  const pageTexts = await extractPdfPageTexts(pdfPath);
+  const allText = pageTexts.join("\n");
+  const tableText = pageTexts[1] || allText;
+  return {
+    teachers: extractImportedTeachers(tableText),
+    templateAssets: await extractPdfTemplateAssets(pdfPath, profileAssetDir),
+    schoolSettings: extractImportedSchoolSettings(allText)
+  };
+}
+
+async function runPdfImport(pdfPath: string, profileAssetDir: string): Promise<ImportedPdf> {
+  try {
+    return await runNodeImport(pdfPath, profileAssetDir);
+  } catch (nodeError) {
+    if (process.env.VERCEL) {
+      throw nodeError;
+    }
+    try {
+      return await runPythonImport(pdfPath, profileAssetDir);
+    } catch {
+      throw nodeError;
+    }
+  }
+}
+
+function runPythonImport(pdfPath: string, profileAssetDir: string): Promise<ImportedPdf> {
   return new Promise((resolve, reject) => {
     const script = path.join(rootDir, "scripts", "import_pdf.py");
     const child = spawn("python3", [script, pdfPath, profileAssetDir], {
       cwd: rootDir,
       stdio: ["ignore", "pipe", "pipe"]
     });
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("استغرق استيراد ملف PDF وقتاً أطول من المتوقع"));
+    }, 25_000);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -995,7 +1299,12 @@ function runPythonImport(pdfPath: string, profileAssetDir: string): Promise<{
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (code) => {
+      clearTimeout(timeout);
       if (code !== 0) {
         reject(new Error(stderr || "تعذر قراءة ملف PDF"));
         return;
@@ -2225,7 +2534,7 @@ app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
     const profileKey = email.replace(/[^a-z0-9_-]/gi, "_");
     const profileAssetDir = path.join(assetDir, profileKey);
     await fsp.mkdir(profileAssetDir, { recursive: true });
-    const imported = await runPythonImport(req.file.path, profileAssetDir);
+    const imported = await runPdfImport(req.file.path, profileAssetDir);
     const templateAssets: TemplateAssets = {};
     if (imported.templateAssets.backgroundUrl) {
       const filename = path.basename(imported.templateAssets.backgroundUrl);
