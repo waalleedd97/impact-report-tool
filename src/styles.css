@@ -775,6 +775,8 @@ button:disabled {
   font-weight: inherit;
   line-height: inherit;
   text-align: center;
+  direction: rtl;
+  unicode-bidi: plaintext;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1294,6 +1296,7 @@ button:disabled {
   line-height: inherit;
   text-align: center;
   direction: rtl;
+  unicode-bidi: plaintext;
   overflow: hidden;
   display: flex;
   align-items: center;

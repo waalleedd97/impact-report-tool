@@ -401,12 +401,19 @@ function EditableSummaryText({
   const classNames = ["summary-edit-target", "text-style-target", selected ? "selected" : "", className || ""]
     .filter(Boolean)
     .join(" ");
+  const editStyle = {
+    ...textOverrideStyle(overrides[styleKey]),
+    direction: "rtl",
+    unicodeBidi: "plaintext"
+  } as CSSProperties;
 
   return (
     <Tag
       ref={ref}
       className={classNames}
-      style={textOverrideStyle(overrides[styleKey])}
+      style={editStyle}
+      dir="rtl"
+      lang="ar"
       contentEditable
       suppressContentEditableWarning
       role="textbox"
@@ -505,6 +512,8 @@ function EditableSkillsText({
     <div
       ref={ref}
       className="skills-edit-input"
+      dir="rtl"
+      lang="ar"
       contentEditable
       suppressContentEditableWarning
       role="textbox"
