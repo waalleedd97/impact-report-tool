@@ -1545,6 +1545,13 @@ button:disabled {
   background: #edfafa;
 }
 
+.saved-group-title {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 900;
+  color: #18324a;
+}
+
 .pdf-editor-empty {
   min-height: 100%;
   display: grid;

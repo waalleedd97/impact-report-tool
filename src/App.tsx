@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteReport,
   deletePdfDocument,
@@ -264,6 +264,8 @@ export default function App() {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [importedNames, setImportedNames] = useState<Teacher[] | null>(null);
+  const pdfDraftDirtyRef = useRef(false);
+  const pdfAutoSaveTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (!subscriptionCode) return;
@@ -298,33 +300,71 @@ export default function App() {
       listReports(accountId, subscription.code),
       listPdfDocuments(accountId, subscription.code)
     ])
-      .then(([loadedProfile, loadedReports, loadedPdfDocuments]) => {
+      .then(async ([loadedProfile, loadedReports, loadedPdfDocuments]) => {
         const localProfile = readJsonBackup<Profile>(profileBackupKey(accountId));
         const normalizedRemote = normalizeProfile(accountId, loadedProfile);
         const normalizedLocal = localProfile ? normalizeProfile(accountId, localProfile) : null;
         const mergedProfile = preferLocalProfile(normalizedRemote, normalizedLocal);
-        const mergedReports = mergeReportBackups(
+        let mergedReports = mergeReportBackups(
           loadedReports,
           readJsonBackup<StoredReportMeta[]>(reportsBackupKey(accountId))
         );
-        setProfile(mergedProfile);
+
+        if (mergedProfile.currentReport) {
+          const existingReport = mergedReports.find((item) => item.id === mergedProfile.currentReport?.id);
+          const currentIsNewer =
+            !existingReport || reportTime(mergedProfile.currentReport) > (Date.parse(existingReport.updatedAt) || 0);
+          if (currentIsNewer) {
+            try {
+              const saved = await saveReport(mergedProfile.currentReport, subscription.code);
+              mergedReports = [saved, ...mergedReports.filter((item) => item.id !== saved.id)];
+            } catch {
+              // Loading should not fail just because archiving the previous draft failed.
+            }
+          }
+        }
+
+        const sessionProfile = { ...mergedProfile, currentReport: undefined };
+        setProfile(sessionProfile);
         setReports(mergedReports);
         setPdfDocuments(loadedPdfDocuments);
-        setCurrentPdfDocument(loadedPdfDocuments[0]?.document);
-        writeJsonBackup(profileBackupKey(accountId), mergedProfile);
+        setCurrentPdfDocument(undefined);
+        setPdfActivityTitle("");
+        pdfDraftDirtyRef.current = false;
+        writeJsonBackup(profileBackupKey(accountId), sessionProfile);
         writeJsonBackup(reportsBackupKey(accountId), mergedReports);
-        if (!mergedProfile.currentReport && mergedProfile.teachers.length) {
-          const reportProfile = {
-            ...mergedProfile,
-            currentReport: reportFromProfile(mergedProfile, courseTitle, level)
-          };
-          setProfile(reportProfile);
-          writeJsonBackup(profileBackupKey(accountId), reportProfile);
-        }
       })
       .catch((error) => setMessage(error.message))
       .finally(() => setBusy(""));
   }, [accountId, subscription?.code]);
+
+  useEffect(() => {
+    if (!currentPdfDocument || !subscription?.code || !pdfDraftDirtyRef.current) return;
+    if (pdfAutoSaveTimerRef.current) {
+      window.clearTimeout(pdfAutoSaveTimerRef.current);
+    }
+    const draft = currentPdfDocument;
+    pdfAutoSaveTimerRef.current = window.setTimeout(() => {
+      pdfDraftDirtyRef.current = false;
+      savePdfDocument(draft, subscription.code)
+        .then((saved) => {
+          setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+          setCurrentPdfDocument((current) =>
+            current?.id === saved.id && current.updatedAt === draft.updatedAt ? saved.document : current
+          );
+        })
+        .catch((error) => {
+          pdfDraftDirtyRef.current = true;
+          setMessage(error instanceof Error ? error.message : "تعذر الحفظ التلقائي لمستند PDF");
+        });
+    }, 1200);
+
+    return () => {
+      if (pdfAutoSaveTimerRef.current) {
+        window.clearTimeout(pdfAutoSaveTimerRef.current);
+      }
+    };
+  }, [currentPdfDocument, subscription?.code]);
 
   const currentReport = profile?.currentReport;
 
@@ -340,6 +380,23 @@ export default function App() {
     setProfile(nextProfile);
     writeJsonBackup(profileBackupKey(nextProfile.email), nextProfile);
     await saveProfile(nextProfile, subscription.code);
+  }
+
+  function upsertReportHistory(email: string, saved: StoredReportMeta) {
+    setReports((items) => {
+      const nextReports = [saved, ...items.filter((item) => item.id !== saved.id)];
+      writeJsonBackup(reportsBackupKey(email), nextReports);
+      return nextReports;
+    });
+  }
+
+  function upsertPdfDocumentHistory(saved: StoredPdfEditorDocumentMeta) {
+    setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+  }
+
+  function handlePdfEditorChange(document: PdfEditorDocument) {
+    pdfDraftDirtyRef.current = true;
+    setCurrentPdfDocument(document);
   }
 
   function normalizeSubscriptionInput(value: string) {
@@ -421,8 +478,22 @@ export default function App() {
       nextProfile.currentReport = reportFromProfile(nextProfile, courseTitle, level);
       setImportedNames(nextProfile.teachers);
       await persistProfile(nextProfile);
+      let archived = false;
+      if (nextProfile.currentReport) {
+        try {
+          const saved = await saveReport(nextProfile.currentReport, subscription?.code || "");
+          upsertReportHistory(nextProfile.email, saved);
+          archived = true;
+        } catch {
+          // The profile is already saved; the user can still save the report manually.
+        }
+      }
       setActiveTab("teachers");
-      setMessage(`تم استخراج ${nextProfile.teachers.length} اسم`);
+      setMessage(
+        archived
+          ? `تم استخراج ${nextProfile.teachers.length} اسم وحفظ التقرير في المحفوظات`
+          : `تم استخراج ${nextProfile.teachers.length} اسم`
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر استيراد الملف");
     } finally {
@@ -454,7 +525,8 @@ export default function App() {
         onProgress: setBusy
       });
       const saved = await importPdfDocument(document, subscription.code);
-      setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      upsertPdfDocumentHistory(saved);
+      pdfDraftDirtyRef.current = false;
       setCurrentPdfDocument(saved.document);
       setPdfActivityTitle(saved.document.title);
       setActiveTab("pdf");
@@ -475,8 +547,12 @@ export default function App() {
     setBusy("حفظ مستند PDF");
     setMessage("");
     try {
+      if (pdfAutoSaveTimerRef.current) {
+        window.clearTimeout(pdfAutoSaveTimerRef.current);
+      }
       const saved = await savePdfDocument(currentPdfDocument, subscription.code);
-      setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      upsertPdfDocumentHistory(saved);
+      pdfDraftDirtyRef.current = false;
       setCurrentPdfDocument(saved.document);
       setMessage("تم حفظ مستند PDF");
     } catch (error) {
@@ -500,19 +576,17 @@ export default function App() {
         },
         subscription.code
       );
+      pdfDraftDirtyRef.current = false;
       setCurrentPdfDocument(result.document);
-      setPdfDocuments((items) => [
-        {
-          id: result.document.id,
-          email: result.document.email,
-          title: result.document.title,
-          sourceFilename: result.document.sourceFilename,
-          createdAt: result.document.createdAt,
-          updatedAt: result.document.updatedAt,
-          document: result.document
-        },
-        ...items.filter((item) => item.id !== result.document.id)
-      ]);
+      upsertPdfDocumentHistory({
+        id: result.document.id,
+        email: result.document.email,
+        title: result.document.title,
+        sourceFilename: result.document.sourceFilename,
+        createdAt: result.document.createdAt,
+        updatedAt: result.document.updatedAt,
+        document: result.document
+      });
       setMessage("تمت تعبئة مستند PDF");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر تعبئة مستند PDF");
@@ -531,8 +605,9 @@ export default function App() {
       await deletePdfDocument(item.id, profile.email, subscription.code);
       setPdfDocuments((items) => items.filter((document) => document.id !== item.id));
       if (currentPdfDocument?.id === item.id) {
-        const next = pdfDocuments.find((document) => document.id !== item.id);
-        setCurrentPdfDocument(next?.document);
+        pdfDraftDirtyRef.current = false;
+        setCurrentPdfDocument(undefined);
+        setPdfActivityTitle("");
       }
       setMessage("تم حذف مستند PDF");
     } catch (error) {
@@ -592,7 +667,13 @@ export default function App() {
         currentReport: nextReport
       };
       await persistProfile(nextProfile);
-      setMessage("تم توليد التقرير عبر الذكاء الاصطناعي");
+      try {
+        const saved = await saveReport(nextReport, subscription?.code || "");
+        upsertReportHistory(nextProfile.email, saved);
+        setMessage("تم توليد التقرير وحفظه في المحفوظات");
+      } catch (saveError) {
+        setMessage(saveError instanceof Error ? `تم توليد التقرير، لكن تعذر حفظه في المحفوظات: ${saveError.message}` : "تم توليد التقرير، لكن تعذر حفظه في المحفوظات");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر توليد التقرير");
     } finally {
@@ -605,11 +686,7 @@ export default function App() {
     setBusy("حفظ التقرير");
     try {
       const saved = await saveReport(profile.currentReport, subscription?.code || "");
-      setReports((items) => {
-        const nextReports = [saved, ...items.filter((item) => item.id !== saved.id)];
-        writeJsonBackup(reportsBackupKey(profile.email), nextReports);
-        return nextReports;
-      });
+      upsertReportHistory(profile.email, saved);
       setMessage("تم حفظ التقرير");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر حفظ التقرير");
@@ -632,6 +709,9 @@ export default function App() {
         writeJsonBackup(reportsBackupKey(profile.email), nextReports);
         return nextReports;
       });
+      if (profile.currentReport?.id === item.id) {
+        setProfile({ ...profile, currentReport: undefined });
+      }
       setMessage("تم حذف التقرير من المحفوظات");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر حذف التقرير");
@@ -930,8 +1010,12 @@ export default function App() {
               setAccountId("");
               setExpiredSubscriptionCode("");
               setProfile(null);
+              setReports([]);
               setPdfDocuments([]);
               setCurrentPdfDocument(undefined);
+              setPdfActivityTitle("");
+              pdfDraftDirtyRef.current = false;
+              setActiveTab("report");
             }}
             title="خروج"
           >
@@ -1110,6 +1194,7 @@ export default function App() {
                     <button
                       className={currentPdfDocument?.id === item.id ? "saved-report-button active" : "saved-report-button"}
                       onClick={() => {
+                        pdfDraftDirtyRef.current = false;
                         setCurrentPdfDocument(item.document);
                         setPdfActivityTitle(item.document.title);
                       }}
@@ -1157,6 +1242,7 @@ export default function App() {
 
         {activeTab === "saved" ? (
           <section className="panel-section saved-list">
+            <div className="saved-group-title">التقارير</div>
             {reports.length ? (
               reports.map((item) => (
                 <div className="saved-item" key={item.id}>
@@ -1171,6 +1257,7 @@ export default function App() {
                       });
                       setCourseTitle(nextReport.courseTitle);
                       setLevel(nextReport.level);
+                      setActiveTab("report");
                     }}
                   >
                     <FileText size={16} />
@@ -1191,6 +1278,37 @@ export default function App() {
             ) : (
               <p className="muted">لا توجد تقارير محفوظة</p>
             )}
+            <div className="saved-group-title">مستندات PDF</div>
+            {pdfDocuments.length ? (
+              pdfDocuments.map((item) => (
+                <div className="saved-item" key={item.id}>
+                  <button
+                    className="saved-report-button"
+                    onClick={() => {
+                      pdfDraftDirtyRef.current = false;
+                      setCurrentPdfDocument(item.document);
+                      setPdfActivityTitle(item.document.title);
+                      setActiveTab("pdf");
+                    }}
+                  >
+                    <FileText size={16} />
+                    <span>{item.title}</span>
+                    <small>{new Date(item.updatedAt).toLocaleDateString("ar-SA")}</small>
+                  </button>
+                  <button
+                    className="saved-delete-button"
+                    onClick={() => void handleDeletePdfDocument(item)}
+                    title="حذف مستند PDF"
+                    aria-label={`حذف ${item.title}`}
+                    disabled={Boolean(busy)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))
+            ) : (
+              <p className="muted">لا توجد مستندات PDF محفوظة</p>
+            )}
           </section>
         ) : null}
 
@@ -1207,7 +1325,7 @@ export default function App() {
         {activeTab === "pdf" ? (
           <PdfEditor
             document={currentPdfDocument}
-            onChange={setCurrentPdfDocument}
+            onChange={handlePdfEditorChange}
             onSave={handleSavePdfDocument}
             onGenerate={handleGeneratePdfDocument}
             disabled={Boolean(busy)}
