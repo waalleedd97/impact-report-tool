@@ -701,8 +701,18 @@ button:disabled {
 .details-table th,
 .details-table td {
   border: 0.7pt solid var(--smart-region-border-color, #777);
-  padding: 2mm 1.5mm;
   vertical-align: middle;
+}
+
+.summary-table th,
+.summary-table td {
+  padding: 1.15mm 1.2mm;
+  overflow: hidden;
+}
+
+.details-table th,
+.details-table td {
+  padding: 2mm 1.5mm;
 }
 
 .summary-table th {
@@ -720,6 +730,9 @@ button:disabled {
   font-size: calc(var(--report-font-size, 12pt) * 0.54);
   line-height: 1.25;
   color: var(--report-accent-color, #ff0000);
+  height: 8mm;
+  padding-top: 0.4mm;
+  padding-bottom: 0.4mm;
 }
 
 .summary-table .summary-benefits-label {
@@ -730,16 +743,16 @@ button:disabled {
 }
 
 .summary-table .summary-benefits-head-row th {
-  height: 10.5mm;
-  padding-top: 0.7mm;
-  padding-bottom: 0.7mm;
+  height: 8mm;
+  padding-top: 0.4mm;
+  padding-bottom: 0.4mm;
   vertical-align: middle;
 }
 
 .summary-table .summary-benefits-percent-row td {
-  height: 7.6mm;
-  padding-top: 0.6mm;
-  padding-bottom: 0.6mm;
+  height: 6.4mm;
+  padding-top: 0.3mm;
+  padding-bottom: 0.3mm;
   vertical-align: middle;
   font-size: calc(var(--report-font-size, 12pt) * 1.08);
   line-height: 1;

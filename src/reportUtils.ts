@@ -107,6 +107,10 @@ function effectivenessLabelForCourse(courseTitle: string) {
   return `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${activityTitle(courseTitle)}`;
 }
 
+function benefitsHeaderLabelForCourse(courseTitle: string) {
+  return `حددي المجالات التي استفدت منها في ${activityTitle(courseTitle)}`;
+}
+
 function impactSummaryForCourse(courseTitle: string, level: ImpactLevel) {
   const title = activityTitle(courseTitle);
   if (level === "low") {
@@ -294,6 +298,7 @@ export function composeReport(input: {
       impactSummary: impactSummaryForCourse(input.courseTitle, input.level),
       contributionLabel: contributionLabelForCourse(input.courseTitle),
       effectivenessLabel: effectivenessLabelForCourse(input.courseTitle),
+      benefitsHeaderLabel: benefitsHeaderLabelForCourse(input.courseTitle),
       contributionHighPercent: participantsCount ? Math.round((contributionHighCount / participantsCount) * 100) : 0,
       contributionMediumPercent: participantsCount ? Math.round((contributionMediumCount / participantsCount) * 100) : 0,
       contributionLowPercent: participantsCount ? Math.round((contributionLowCount / participantsCount) * 100) : 0,

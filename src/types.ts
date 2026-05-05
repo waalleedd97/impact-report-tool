@@ -142,6 +142,7 @@ export type ReportSummary = {
   impactSummary: string;
   contributionLabel?: string;
   effectivenessLabel?: string;
+  benefitsHeaderLabel?: string;
   contributionHighPercent: number;
   contributionMediumPercent: number;
   contributionLowPercent: number;

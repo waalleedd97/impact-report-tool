@@ -167,7 +167,7 @@ function regionStyle(region: TableRegion): CSSProperties {
     top: `${region.topMm}mm`,
     left: `${region.leftMm}mm`,
     width: `${region.widthMm}mm`,
-    height: region.id === "summary" || region.id === "details" ? undefined : `${region.heightMm}mm`,
+    height: region.id === "details" ? undefined : `${region.heightMm}mm`,
     fontSize: region.fontSizePt ? `${region.fontSizePt}pt` : undefined,
     "--smart-region-border-color": region.borderColor || "#777777",
     "--smart-region-bg": region.backgroundColor || "transparent",
@@ -1284,6 +1284,19 @@ function SummaryPage({
     report.summary.contributionLabel || `مدى مساهمة ${report.courseTitle || "النشاط"} في تطوير أدائك التدريسي`;
   const effectivenessLabel =
     report.summary.effectivenessLabel || `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${report.courseTitle || "النشاط"}`;
+  const benefitsHeaderLabel =
+    report.summary.benefitsHeaderLabel || `حددي المجالات التي استفدت منها في ${report.courseTitle || "النشاط"}`;
+  const updateBenefitColumnLabel = (columnId: string, label: string, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange(
+      {
+        benefitColumns: report.benefitColumns.map((column) =>
+          column.id === columnId ? { ...column, label: label.trim() || column.label } : column
+        )
+      },
+      { persist }
+    );
+  };
   return (
     <PageChrome
       assets={{ ...report.templateAssets, ...smartTemplate.assets }}
@@ -1378,7 +1391,12 @@ function SummaryPage({
             </th>
             {columns.map((column) => (
               <th className="benefit-head" key={column.id}>
-                {text(`summary-benefit-label-${column.id}`, column.label, smallLabelDefaults)}
+                {editableSummary(
+                  `summary-benefit-label-${column.id}`,
+                  column.label,
+                  smallLabelDefaults,
+                  (label, persist) => updateBenefitColumnLabel(column.id, label, persist)
+                )}
               </th>
             ))}
             {fillerSpan ? <th colSpan={fillerSpan} className="benefit-head" /> : null}
@@ -1490,6 +1508,32 @@ function DetailPage({
   const benefitWidths = benefitColumnWidths(columns);
   const detailRegion = smartTemplate.tableRegions.details;
   const start = pageIndex * rowsPerPage;
+  const contributionLabel =
+    report.summary.contributionLabel || `مدى مساهمة ${report.courseTitle || "النشاط"} في تطوير أدائك التدريسي`;
+  const effectivenessLabel =
+    report.summary.effectivenessLabel || `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${report.courseTitle || "النشاط"}`;
+  const benefitsHeaderLabel =
+    report.summary.benefitsHeaderLabel || `حددي المجالات التي استفدت منها في ${report.courseTitle || "النشاط"}`;
+  const updateSummary = (patch: Partial<Report["summary"]>, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
+  };
+  const editableHeader = (
+    styleKey: string,
+    value: string,
+    defaults: TextStyleDefaults,
+    onChange: (value: string, persist?: boolean) => void
+  ) => (
+    <EditableSummaryText
+      styleKey={`${pageKey}:${styleKey}`}
+      value={value}
+      defaults={defaults}
+      overrides={textOverrides}
+      selected={selectedText?.key === `${pageKey}:${styleKey}`}
+      onSelectText={onSelectText}
+      onChange={onChange}
+    />
+  );
   const updateContribution = (absoluteIndex: number, contribution: string) => {
     if (!onReportChange) return;
     onReportChange({
@@ -1567,13 +1611,19 @@ function DetailPage({
               {text("head-lessons", "عدد الدروس التطبيقية التي حضرتها", headDefaults)}
             </th>
             <th rowSpan={2} className="rating-cell contribution-cell">
-              {text("head-contribution", "مدى مساهمة الدروس التطبيقية في تطوير أدائك التدريسي", headDefaults)}
+              {editableHeader("head-contribution", contributionLabel, headDefaults, (contributionLabel, persist) =>
+                updateSummary({ contributionLabel }, persist)
+              )}
             </th>
             <th rowSpan={2} className="rating-cell effectiveness-cell">
-              {text("head-effectiveness", "ما فعالية مدى فعالية الأساليب المستخدمة في تنفيذ الدروس التطبيقية", headDefaults)}
+              {editableHeader("head-effectiveness", effectivenessLabel, headDefaults, (effectivenessLabel, persist) =>
+                updateSummary({ effectivenessLabel }, persist)
+              )}
             </th>
             <th colSpan={columns.length} className="benefit-group">
-              {text("head-benefits", "حددي المجالات التي استفدت منها في الدروس التطبيقية", headDefaults)}
+              {editableHeader("head-benefits", benefitsHeaderLabel, headDefaults, (benefitsHeaderLabel, persist) =>
+                updateSummary({ benefitsHeaderLabel }, persist)
+              )}
             </th>
             <th rowSpan={2} className="skills-cell">
               {text("head-skills", "المهارات والقدرات المكتسبة التي نفذتها بعد حضور الدروس التطبيقية", headDefaults)}
