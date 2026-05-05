@@ -24,7 +24,16 @@ import {
 import ReportPreview from "./components/ReportPreview";
 import { createDefaultSmartTemplate, defaultPrintSettings, emptyProfile } from "./defaults";
 import { reportFromProfile } from "./reportUtils";
-import type { ImpactLevel, PrintSettings, Profile, Report, SmartTemplate, StoredReportMeta, Teacher } from "./types";
+import type {
+  GenerationOptions,
+  ImpactLevel,
+  PrintSettings,
+  Profile,
+  Report,
+  SmartTemplate,
+  StoredReportMeta,
+  Teacher
+} from "./types";
 
 const rememberedEmailKey = "impact-report-email";
 const appName = "المحرر الذكي";
@@ -189,6 +198,9 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [courseTitle, setCourseTitle] = useState("الدروس التطبيقية");
   const [level, setLevel] = useState<ImpactLevel>("high");
+  const [strengthCount, setStrengthCount] = useState("");
+  const [improvementCount, setImprovementCount] = useState("");
+  const [agentNotes, setAgentNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"report" | "teachers" | "settings" | "saved">("report");
   const [reports, setReports] = useState<StoredReportMeta[]>([]);
   const [busy, setBusy] = useState("");
@@ -294,12 +306,25 @@ export default function App() {
     setBusy("DeepSeek يعبئ التقرير بالكامل، قد يستغرق حتى دقيقة");
     setMessage("");
     try {
+      const generationOptions: GenerationOptions = {};
+      const parsedStrengthCount = Number(strengthCount);
+      const parsedImprovementCount = Number(improvementCount);
+      if (Number.isFinite(parsedStrengthCount) && parsedStrengthCount > 0) {
+        generationOptions.strengthCount = Math.round(parsedStrengthCount);
+      }
+      if (Number.isFinite(parsedImprovementCount) && parsedImprovementCount > 0) {
+        generationOptions.improvementCount = Math.round(parsedImprovementCount);
+      }
+      if (agentNotes.trim()) {
+        generationOptions.notes = agentNotes.trim();
+      }
       const result = await generateReport({
         email: profile.email,
         courseTitle,
         level,
         teachers: profile.teachers,
-        profile
+        profile,
+        generationOptions
       });
       const nextProfile = {
         ...profile,
@@ -599,6 +624,50 @@ export default function App() {
                 ))}
               </div>
             </div>
+            <div className="ai-generation-options">
+              <div className="ai-generation-title">
+                <span>تخصيص الذكاء الاصطناعي</span>
+                <small>اختياري</small>
+              </div>
+              <div className="generation-count-grid">
+                <label>
+                  عدد نقاط القوة
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={strengthCount}
+                    onChange={(event) => setStrengthCount(event.target.value)}
+                    placeholder="الوكيل يحدد"
+                  />
+                </label>
+                <label>
+                  عدد فرص التحسين
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={improvementCount}
+                    onChange={(event) => setImprovementCount(event.target.value)}
+                    placeholder="الوكيل يحدد"
+                  />
+                </label>
+              </div>
+              <label>
+                ملاحظات عامة للوكيل
+                <textarea
+                  value={agentNotes}
+                  onChange={(event) => setAgentNotes(event.target.value)}
+                  placeholder="مثال: أعطِ المعلمات التقييم الكامل جميعهم، واجعل نقاط القوة مركزة على الأداء الوظيفي."
+                />
+              </label>
+            </div>
+            {busy ? (
+              <div className="ai-working-banner">
+                <Loader2 className="spin" size={16} />
+                <span>{busy}</span>
+              </div>
+            ) : null}
             <div className="action-grid">
               <button onClick={handleGenerate} disabled={Boolean(busy)}>
                 <Sparkles size={17} />

@@ -1,4 +1,4 @@
-import type { ImpactLevel, Profile, Report, SmartTemplate, StoredReportMeta, Teacher } from "./types";
+import type { GenerationOptions, ImpactLevel, Profile, Report, SmartTemplate, StoredReportMeta, Teacher } from "./types";
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -44,6 +44,7 @@ export async function generateReport(input: {
   level: ImpactLevel;
   teachers: Teacher[];
   profile: Profile;
+  generationOptions?: GenerationOptions;
 }) {
   const response = await fetch("/api/reports/generate", {
     method: "POST",

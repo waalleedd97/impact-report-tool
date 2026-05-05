@@ -168,6 +168,12 @@ export type Report = {
   improvements: string[];
 };
 
+export type GenerationOptions = {
+  strengthCount?: number;
+  improvementCount?: number;
+  notes?: string;
+};
+
 export type Profile = {
   email: string;
   schoolSettings: SchoolSettings;

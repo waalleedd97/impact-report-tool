@@ -242,6 +242,59 @@ button:disabled {
   gap: 8px;
 }
 
+.ai-generation-options {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #cfe0e3;
+  border-radius: 8px;
+  background: #f7fbfb;
+}
+
+.ai-generation-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #1f5660;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ai-generation-title small {
+  color: #708394;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.generation-count-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-generation-options textarea {
+  min-height: 78px;
+}
+
+.ai-working-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #238b8f;
+  border-radius: 8px;
+  background: #e8f7f5;
+  color: #0d686d;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.7;
+  box-shadow: 0 8px 20px rgba(26, 91, 101, 0.12);
+}
+
 .file-picker {
   position: relative;
   background: #2a9d69;
