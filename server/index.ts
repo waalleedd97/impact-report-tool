@@ -40,6 +40,7 @@ type TemplateAssets = {
 };
 
 type TableRegionId = "summary" | "strengths" | "improvements" | "details";
+type DetailColumnId = "number" | "name" | "lessons" | "contribution" | "effectiveness" | "benefits" | "skills";
 
 type TableColumnTemplate = {
   id: string;
@@ -153,6 +154,7 @@ type Profile = {
   teachers: Teacher[];
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: DetailColumnId[];
   templateAssets: TemplateAssets;
   smartTemplates: SmartTemplate[];
   activeSmartTemplateId?: string;
@@ -174,6 +176,7 @@ type Report = {
   printSettings: PrintSettings;
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: DetailColumnId[];
   rows: ReportRow[];
   summary: {
     totalTeachers: number;
@@ -639,6 +642,16 @@ const defaultBenefitColumns: BenefitColumn[] = [
   { id: "motivation", label: "التعزيز والتحفيز" }
 ];
 
+const defaultDetailColumnIds: DetailColumnId[] = [
+  "number",
+  "name",
+  "lessons",
+  "contribution",
+  "effectiveness",
+  "benefits",
+  "skills"
+];
+
 const defaultSchoolSettings: SchoolSettings = {
   country: "المملكة العربية السعودية",
   ministry: "وزارة التعليم",
@@ -759,6 +772,7 @@ function emptyProfile(email: string): Profile {
     teachers: [],
     benefitColumns: defaultBenefitColumns,
     visibleColumnIds: defaultBenefitColumns.map((column) => column.id),
+    visibleDetailColumnIds: defaultDetailColumnIds,
     templateAssets: {},
     smartTemplates: [createDefaultSmartTemplate()],
     activeSmartTemplateId: "impact-report-smart-template",
@@ -1414,6 +1428,7 @@ function composeReport(input: {
   labelActivityTitle?: string;
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: DetailColumnId[];
   rows: ReportRow[];
   strengths: string[];
   improvements: string[];
@@ -1443,6 +1458,7 @@ function composeReport(input: {
     printSettings: { ...defaultPrintSettings, ...input.printSettings },
     benefitColumns: input.benefitColumns,
     visibleColumnIds: input.visibleColumnIds,
+    visibleDetailColumnIds: input.visibleDetailColumnIds,
     rows,
     summary: {
       totalTeachers,
@@ -1550,6 +1566,7 @@ function localGeneratedReport(input: {
     printSettings: input.profile.printSettings,
     benefitColumns: input.profile.benefitColumns,
     visibleColumnIds: input.profile.visibleColumnIds,
+    visibleDetailColumnIds: input.profile.visibleDetailColumnIds,
     rows,
     strengths: [
       "الإلمام بالمادة العلمية ووضوح الأهداف التعليمية التربوية",
@@ -1839,6 +1856,7 @@ function sanitizeAiReport(payload: any, input: {
     labelActivityTitle,
     benefitColumns: generatedBenefitColumns,
     visibleColumnIds,
+    visibleDetailColumnIds: input.profile.visibleDetailColumnIds,
     rows: distributedRows,
     strengths,
     improvements

@@ -1,4 +1,4 @@
-import type { BenefitColumn, PrintSettings, Profile, SchoolSettings, SmartTemplate, TemplateAssets } from "./types";
+import type { BenefitColumn, DetailColumnId, PrintSettings, Profile, SchoolSettings, SmartTemplate, TemplateAssets } from "./types";
 
 export const defaultBenefitColumns: BenefitColumn[] = [
   { id: "subject", label: "فهم المادة الدراسية" },
@@ -8,6 +8,16 @@ export const defaultBenefitColumns: BenefitColumn[] = [
   { id: "classroom", label: "الإدارة الصفية" },
   { id: "technology", label: "التطبيقات التقنية" },
   { id: "motivation", label: "التعزيز والتحفيز" }
+];
+
+export const defaultDetailColumnIds: DetailColumnId[] = [
+  "number",
+  "name",
+  "lessons",
+  "contribution",
+  "effectiveness",
+  "benefits",
+  "skills"
 ];
 
 export const defaultSchoolSettings: SchoolSettings = {
@@ -146,6 +156,7 @@ export function emptyProfile(email: string): Profile {
     teachers: [],
     benefitColumns: defaultBenefitColumns,
     visibleColumnIds: defaultBenefitColumns.map((column) => column.id),
+    visibleDetailColumnIds: defaultDetailColumnIds,
     templateAssets: {},
     smartTemplates: [createDefaultSmartTemplate()],
     activeSmartTemplateId: "impact-report-smart-template",

@@ -25,10 +25,11 @@ import {
   saveReport
 } from "./api";
 import ReportPreview from "./components/ReportPreview";
-import { createDefaultSmartTemplate, defaultPrintSettings, emptyProfile } from "./defaults";
+import { createDefaultSmartTemplate, defaultDetailColumnIds, defaultPrintSettings, emptyProfile } from "./defaults";
 import { reportFromProfile } from "./reportUtils";
 import type {
   GenerationOptions,
+  DetailColumnId,
   ImpactLevel,
   PrintSettings,
   Profile,
@@ -176,6 +177,7 @@ function normalizeReport(
     reportTitle: report.reportTitle || defaultReportTitle(report.courseTitle),
     printSettings: normalizePrintSettings(fallbackPrintSettings, report.printSettings),
     smartTemplate: report.smartTemplate || fallbackSmartTemplate,
+    visibleDetailColumnIds: report.visibleDetailColumnIds?.length ? report.visibleDetailColumnIds : defaultDetailColumnIds,
     percentageOverrides: { ...report.percentageOverrides },
     summaryNumberOverrides: { ...report.summaryNumberOverrides }
   };
@@ -210,6 +212,9 @@ function normalizeProfile(email: string, loadedProfile: Partial<Profile>): Profi
     email,
     smartTemplates: smartTemplateState.smartTemplates,
     activeSmartTemplateId: smartTemplateState.activeSmartTemplateId,
+    visibleDetailColumnIds: loadedProfile.visibleDetailColumnIds?.length
+      ? loadedProfile.visibleDetailColumnIds
+      : defaultDetailColumnIds,
     printSettings: normalizePrintSettings(loadedProfile.printSettings)
   };
 
@@ -595,6 +600,7 @@ export default function App() {
         schoolSettings: nextProfile.schoolSettings,
         benefitColumns: nextProfile.benefitColumns,
         visibleColumnIds: nextProfile.visibleColumnIds,
+        visibleDetailColumnIds: nextProfile.visibleDetailColumnIds,
         templateAssets: nextProfile.templateAssets,
         smartTemplate: nextSmartTemplate,
         printSettings: nextProfile.printSettings
@@ -1037,6 +1043,47 @@ function ColumnToggles({
   );
 }
 
+const detailColumnOptions: Array<{ id: DetailColumnId; label: string }> = [
+  { id: "number", label: "م" },
+  { id: "name", label: "الاسم" },
+  { id: "lessons", label: "عدد الحضور/التنفيذ" },
+  { id: "contribution", label: "مساهمة النشاط" },
+  { id: "effectiveness", label: "فعالية الأساليب" },
+  { id: "benefits", label: "مجالات الاستفادة" },
+  { id: "skills", label: "المهارات المكتسبة" }
+];
+
+function DetailColumnToggles({
+  profile,
+  onChange
+}: {
+  profile: Profile;
+  onChange: (patch: Partial<Profile>) => Promise<void>;
+}) {
+  const activeIds = profile.visibleDetailColumnIds?.length ? profile.visibleDetailColumnIds : defaultDetailColumnIds;
+  return (
+    <div className="column-toggles">
+      <span>أعمدة جدول المعلمات</span>
+      {detailColumnOptions.map((column) => {
+        const active = activeIds.includes(column.id);
+        return (
+          <button
+            key={column.id}
+            className={active ? "active" : ""}
+            onClick={() => {
+              const next = active ? activeIds.filter((id) => id !== column.id) : [...activeIds, column.id];
+              onChange({ visibleDetailColumnIds: next.length ? next : [column.id] });
+            }}
+          >
+            <Check size={14} />
+            {column.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function TeacherEditor({
   profile,
   importedNames,
@@ -1222,6 +1269,11 @@ function SettingsEditor({
           value={smartTemplate.tableRegions.improvements.backgroundColor || "#d9e4f5"}
           onChange={(value) => updateRegion("improvements", { backgroundColor: value })}
         />
+      </div>
+      <div className="settings-group">
+        <h2>أعمدة جدول المعلمات</h2>
+        <DetailColumnToggles profile={profile} onChange={onChange} />
+        <ColumnToggles profile={profile} onChange={onChange} />
       </div>
       {report ? (
         <>

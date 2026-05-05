@@ -1,4 +1,4 @@
-import { defaultBenefitColumns, defaultPrintSettings, defaultSchoolSettings } from "./defaults";
+import { defaultBenefitColumns, defaultDetailColumnIds, defaultPrintSettings, defaultSchoolSettings } from "./defaults";
 import type {
   BenefitColumn,
   ImpactLevel,
@@ -248,6 +248,7 @@ export function localGeneratedReport(input: {
   schoolSettings?: SchoolSettings;
   benefitColumns?: BenefitColumn[];
   visibleColumnIds?: string[];
+  visibleDetailColumnIds?: typeof defaultDetailColumnIds;
   templateAssets?: TemplateAssets;
   smartTemplate?: Profile["smartTemplates"][number];
   printSettings?: Partial<typeof defaultPrintSettings>;
@@ -290,6 +291,7 @@ export function localGeneratedReport(input: {
     printSettings: { ...defaultPrintSettings, ...input.printSettings },
     benefitColumns,
     visibleColumnIds,
+    visibleDetailColumnIds: input.visibleDetailColumnIds?.length ? input.visibleDetailColumnIds : defaultDetailColumnIds,
     rows,
     strengths,
     improvements
@@ -311,6 +313,7 @@ export function composeReport(input: {
   printSettings?: Partial<typeof defaultPrintSettings>;
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: typeof defaultDetailColumnIds;
   rows: ReportRow[];
   strengths: string[];
   improvements: string[];
@@ -344,6 +347,7 @@ export function composeReport(input: {
     printSettings: { ...defaultPrintSettings, ...input.printSettings },
     benefitColumns: input.benefitColumns,
     visibleColumnIds: input.visibleColumnIds,
+    visibleDetailColumnIds: input.visibleDetailColumnIds,
     rows: input.rows,
     summary: {
       totalTeachers,
@@ -381,6 +385,7 @@ export function reportFromProfile(profile: Profile, courseTitle: string, level: 
     schoolSettings: profile.schoolSettings,
     benefitColumns: profile.benefitColumns,
     visibleColumnIds: profile.visibleColumnIds,
+    visibleDetailColumnIds: profile.visibleDetailColumnIds,
     templateAssets: profile.templateAssets,
     smartTemplate: activeSmartTemplate,
     printSettings: profile.printSettings

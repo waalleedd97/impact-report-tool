@@ -25,6 +25,7 @@ export type TemplateAssets = {
 };
 
 export type TableRegionId = "summary" | "strengths" | "improvements" | "details";
+export type DetailColumnId = "number" | "name" | "lessons" | "contribution" | "effectiveness" | "benefits" | "skills";
 
 export type TableColumnTemplate = {
   id: string;
@@ -167,6 +168,7 @@ export type Report = {
   printSettings: PrintSettings;
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: DetailColumnId[];
   rows: ReportRow[];
   summary: ReportSummary;
   percentageOverrides: Record<string, number>;
@@ -201,6 +203,7 @@ export type Profile = {
   teachers: Teacher[];
   benefitColumns: BenefitColumn[];
   visibleColumnIds: string[];
+  visibleDetailColumnIds: DetailColumnId[];
   templateAssets: TemplateAssets;
   smartTemplates: SmartTemplate[];
   activeSmartTemplateId?: string;

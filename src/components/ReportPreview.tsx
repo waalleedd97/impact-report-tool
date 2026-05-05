@@ -7,9 +7,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from "react";
-import { createDefaultSmartTemplate, defaultPrintSettings, fontFamilyOptions, fontWeightOptions } from "../defaults";
+import { createDefaultSmartTemplate, defaultDetailColumnIds, defaultPrintSettings, fontFamilyOptions, fontWeightOptions } from "../defaults";
 import type {
   CheckmarkOffset,
+  DetailColumnId,
   PrintSettings,
   Report,
   ReportRow,
@@ -31,6 +32,15 @@ const detailColumnWidths = {
   effectiveness: 24.91,
   skills: 52.37,
   benefitTotal: 39.88
+};
+const detailColumnWidthById: Record<DetailColumnId, number> = {
+  number: detailColumnWidths.number,
+  name: detailColumnWidths.name,
+  lessons: detailColumnWidths.lessons,
+  contribution: detailColumnWidths.contribution,
+  effectiveness: detailColumnWidths.effectiveness,
+  benefits: detailColumnWidths.benefitTotal,
+  skills: detailColumnWidths.skills
 };
 const defaultBenefitColumnWidths: Record<string, number> = {
   subject: 4.87,
@@ -1248,14 +1258,20 @@ function visibleColumns(report: Report) {
   return report.benefitColumns.filter((column) => report.visibleColumnIds.includes(column.id));
 }
 
-function benefitColumnWidths(columns: ReturnType<typeof visibleColumns>) {
+function visibleDetailColumns(report: Report) {
+  const ids = report.visibleDetailColumnIds?.length ? report.visibleDetailColumnIds : defaultDetailColumnIds;
+  const visible = defaultDetailColumnIds.filter((id) => ids.includes(id));
+  return visible.length ? visible : defaultDetailColumnIds;
+}
+
+function benefitColumnWidths(columns: ReturnType<typeof visibleColumns>, totalWidth = detailColumnWidths.benefitTotal) {
   if (!columns.length) return [];
   const knownWidths = columns.map((column) => defaultBenefitColumnWidths[column.id]);
   if (knownWidths.every((width) => width)) {
     const total = knownWidths.reduce((sum, width) => sum + width, 0);
-    return knownWidths.map((width) => (width / total) * detailColumnWidths.benefitTotal);
+    return knownWidths.map((width) => (width / total) * totalWidth);
   }
-  return columns.map(() => detailColumnWidths.benefitTotal / columns.length);
+  return columns.map(() => totalWidth / columns.length);
 }
 
 function SummaryPage({
@@ -1631,8 +1647,23 @@ function DetailPage({
     </StyleTarget>
   );
   const columns = visibleColumns(report);
-  const benefitWidths = benefitColumnWidths(columns);
+  const detailColumns = visibleDetailColumns(report);
   const detailRegion = smartTemplate.tableRegions.details;
+  const showNumberColumn = detailColumns.includes("number");
+  const showNameColumn = detailColumns.includes("name");
+  const showLessonsColumn = detailColumns.includes("lessons");
+  const showContributionColumn = detailColumns.includes("contribution");
+  const showEffectivenessColumn = detailColumns.includes("effectiveness");
+  const showBenefitsColumn = detailColumns.includes("benefits") && columns.length > 0;
+  const showSkillsColumn = detailColumns.includes("skills");
+  const visibleRawWidth = detailColumns.reduce((sum, columnId) => {
+    if (columnId === "benefits" && !showBenefitsColumn) return sum;
+    return sum + detailColumnWidthById[columnId];
+  }, 0);
+  const widthScale = detailRegion.widthMm / Math.max(1, visibleRawWidth);
+  const columnWidth = (columnId: DetailColumnId) => detailColumnWidthById[columnId] * widthScale;
+  const benefitWidths = showBenefitsColumn ? benefitColumnWidths(columns, columnWidth("benefits")) : [];
+  const headerRowSpan = showBenefitsColumn ? 2 : 1;
   const start = pageIndex * rowsPerPage;
   const detailLessonsCountLabel = reportLabel(
     report,
@@ -1738,51 +1769,51 @@ function DetailPage({
       </h1>
       <table className="details-table" style={regionStyle(detailRegion)}>
         <colgroup>
-          <col style={{ width: `${detailColumnWidths.number}mm` }} />
-          <col style={{ width: `${detailColumnWidths.name}mm` }} />
-          <col style={{ width: `${detailColumnWidths.lessons}mm` }} />
-          <col style={{ width: `${detailColumnWidths.contribution}mm` }} />
-          <col style={{ width: `${detailColumnWidths.effectiveness}mm` }} />
-          {columns.map((column, index) => (
+          {showNumberColumn ? <col style={{ width: `${columnWidth("number")}mm` }} /> : null}
+          {showNameColumn ? <col style={{ width: `${columnWidth("name")}mm` }} /> : null}
+          {showLessonsColumn ? <col style={{ width: `${columnWidth("lessons")}mm` }} /> : null}
+          {showContributionColumn ? <col style={{ width: `${columnWidth("contribution")}mm` }} /> : null}
+          {showEffectivenessColumn ? <col style={{ width: `${columnWidth("effectiveness")}mm` }} /> : null}
+          {showBenefitsColumn ? columns.map((column, index) => (
             <col key={column.id} style={{ width: `${benefitWidths[index]}mm` }} />
-          ))}
-          <col style={{ width: `${detailColumnWidths.skills}mm` }} />
+          )) : null}
+          {showSkillsColumn ? <col style={{ width: `${columnWidth("skills")}mm` }} /> : null}
         </colgroup>
         <thead>
           <tr>
-            <th rowSpan={2} className="number-cell">
+            {showNumberColumn ? <th rowSpan={headerRowSpan} className="number-cell">
               {text("head-number", "م", headDefaults)}
-            </th>
-            <th rowSpan={2} className="name-cell">
+            </th> : null}
+            {showNameColumn ? <th rowSpan={headerRowSpan} className="name-cell">
               {text("head-name", "الاسم", headDefaults)}
-            </th>
-            <th rowSpan={2} className="lessons-cell">
+            </th> : null}
+            {showLessonsColumn ? <th rowSpan={headerRowSpan} className="lessons-cell">
               {editableHeader("head-lessons", detailLessonsCountLabel, headDefaults, (detailLessonsCountLabel, persist) =>
                 updateSummary({ detailLessonsCountLabel }, persist)
               )}
-            </th>
-            <th rowSpan={2} className="rating-cell contribution-cell">
+            </th> : null}
+            {showContributionColumn ? <th rowSpan={headerRowSpan} className="rating-cell contribution-cell">
               {editableHeader("head-contribution", contributionLabel, headDefaults, (contributionLabel, persist) =>
                 updateSummary({ contributionLabel }, persist)
               )}
-            </th>
-            <th rowSpan={2} className="rating-cell effectiveness-cell">
+            </th> : null}
+            {showEffectivenessColumn ? <th rowSpan={headerRowSpan} className="rating-cell effectiveness-cell">
               {editableHeader("head-effectiveness", effectivenessLabel, headDefaults, (effectivenessLabel, persist) =>
                 updateSummary({ effectivenessLabel }, persist)
               )}
-            </th>
-            <th colSpan={columns.length} className="benefit-group">
+            </th> : null}
+            {showBenefitsColumn ? <th colSpan={columns.length} className="benefit-group">
               {editableHeader("head-benefits", benefitsHeaderLabel, headDefaults, (benefitsHeaderLabel, persist) =>
                 updateSummary({ benefitsHeaderLabel }, persist)
               )}
-            </th>
-            <th rowSpan={2} className="skills-cell">
+            </th> : null}
+            {showSkillsColumn ? <th rowSpan={headerRowSpan} className="skills-cell">
               {editableHeader("head-skills", acquiredSkillsLabel, headDefaults, (acquiredSkillsLabel, persist) =>
                 updateSummary({ acquiredSkillsLabel }, persist)
               )}
-            </th>
+            </th> : null}
           </tr>
-          <tr>
+          {showBenefitsColumn ? <tr>
             {columns.map((column) => (
               <th className="vertical-head" key={column.id}>
                 <span className="vertical-head-label">
@@ -1795,7 +1826,7 @@ function DetailPage({
                 </span>
               </th>
             ))}
-          </tr>
+          </tr> : null}
         </thead>
         <tbody>
           {rows.map((row, index) => {
@@ -1804,9 +1835,9 @@ function DetailPage({
             const tone = contributionTone(contribution);
             return (
               <tr key={row.teacherId || `${row.teacherName}-${index}`}>
-                <td className="number-cell">{text(`row-${absoluteIndex}-number`, absoluteIndex + 1)}</td>
-                <td className="name-cell">{text(`row-${absoluteIndex}-name`, row.teacherName)}</td>
-                <td className="lessons-cell">
+                {showNumberColumn ? <td className="number-cell">{text(`row-${absoluteIndex}-number`, absoluteIndex + 1)}</td> : null}
+                {showNameColumn ? <td className="name-cell">{text(`row-${absoluteIndex}-name`, row.teacherName)}</td> : null}
+                {showLessonsColumn ? <td className="lessons-cell">
                   <input
                     className="lessons-count-input"
                     type="number"
@@ -1819,8 +1850,8 @@ function DetailPage({
                     onChange={(event) => updateLessonsCount(absoluteIndex, Number(event.currentTarget.value))}
                     onBlur={(event) => updateLessonsCount(absoluteIndex, Number(event.currentTarget.value))}
                   />
-                </td>
-                <td className={`rating-cell contribution-cell contribution-${tone}`}>
+                </td> : null}
+                {showContributionColumn ? <td className={`rating-cell contribution-cell contribution-${tone}`}>
                   <select
                     className="contribution-select"
                     value={contribution}
@@ -1831,11 +1862,11 @@ function DetailPage({
                     <option value={contributionOptions.high}>{contributionOptions.high}</option>
                     <option value={contributionOptions.medium}>{contributionOptions.medium}</option>
                   </select>
-                </td>
-                <td className="rating-cell effectiveness-cell">
+                </td> : null}
+                {showEffectivenessColumn ? <td className="rating-cell effectiveness-cell">
                   {text(`row-${absoluteIndex}-effectiveness`, row.effectiveness)}
-                </td>
-                {columns.map((column) => {
+                </td> : null}
+                {showBenefitsColumn ? columns.map((column) => {
                   const checkmarkKey = `${pageKey}:teacher-${row.teacherId || absoluteIndex}:benefit-${column.id}`;
                   const checked = Boolean(row.benefits[column.id]);
                   return (
@@ -1868,14 +1899,14 @@ function DetailPage({
                       ) : null}
                     </td>
                   );
-                })}
-                <td className="skills-cell">
+                }) : null}
+                {showSkillsColumn ? <td className="skills-cell">
                   <EditableSkillsText
                     value={row.acquiredSkills}
                     label={`المهارات والقدرات المكتسبة - ${row.teacherName}`}
                     onChange={(value, persist) => updateAcquiredSkills(absoluteIndex, value, persist)}
                   />
-                </td>
+                </td> : null}
               </tr>
             );
           })}
