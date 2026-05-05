@@ -366,6 +366,64 @@ function StyleTarget({
   );
 }
 
+function EditableSummaryText({
+  as,
+  value,
+  styleKey,
+  defaults,
+  overrides,
+  selected,
+  onSelectText,
+  onChange,
+  className
+}: {
+  as?: ElementType;
+  value: string;
+  styleKey: string;
+  defaults: TextStyleDefaults;
+  overrides: Record<string, TextStyleOverride>;
+  selected: boolean;
+  onSelectText: (selection: SelectedText) => void;
+  onChange: (value: string, persist?: boolean) => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLElement | null>(null);
+  const Tag = as || "span";
+
+  useEffect(() => {
+    if (document.activeElement === ref.current) return;
+    if (ref.current && ref.current.textContent !== value) {
+      ref.current.textContent = value;
+    }
+  }, [value]);
+
+  const readValue = () => ref.current?.textContent || "";
+  const classNames = ["summary-edit-target", "text-style-target", selected ? "selected" : "", className || ""]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <Tag
+      ref={ref}
+      className={classNames}
+      style={textOverrideStyle(overrides[styleKey])}
+      contentEditable
+      suppressContentEditableWarning
+      role="textbox"
+      tabIndex={0}
+      onPointerDown={(event: ReactPointerEvent<HTMLElement>) => {
+        event.stopPropagation();
+        selectTextTarget(event.currentTarget, styleKey, defaults, onSelectText);
+      }}
+      onInput={() => onChange(readValue(), false)}
+      onBlur={() => onChange(readValue().trim(), true)}
+      title="اضغط للتعديل اليدوي"
+    >
+      {value}
+    </Tag>
+  );
+}
+
 function percentValue(report: Report, key: string, fallbackValue: number) {
   const override = report.percentageOverrides?.[key];
   return Number.isFinite(override) ? override : fallbackValue;
@@ -1103,6 +1161,7 @@ function SummaryPage({
   onSelectPercentage,
   selectedNumber,
   onSelectNumber,
+  onReportChange,
   onPrintSettingsChange,
   onSmartTemplateChange
 }: {
@@ -1118,6 +1177,7 @@ function SummaryPage({
   onSelectPercentage: (selection: SelectedPercentage) => void;
   selectedNumber: SelectedSummaryNumber | null;
   onSelectNumber: (selection: SelectedSummaryNumber) => void;
+  onReportChange?: ReportChangeHandler;
   onPrintSettingsChange?: PrintSettingsChangeHandler;
   onSmartTemplateChange?: SmartTemplateChangeHandler;
 }) {
@@ -1189,6 +1249,26 @@ function SummaryPage({
       onSelectNumber={onSelectNumber}
     />
   );
+  const editableSummary = (
+    styleKey: string,
+    value: string,
+    defaults: TextStyleDefaults,
+    onChange: (value: string, persist?: boolean) => void
+  ) => (
+    <EditableSummaryText
+      styleKey={`${pageKey}:${styleKey}`}
+      value={value}
+      defaults={defaults}
+      overrides={textOverrides}
+      selected={selectedText?.key === `${pageKey}:${styleKey}`}
+      onSelectText={onSelectText}
+      onChange={onChange}
+    />
+  );
+  const updateSummary = (patch: Partial<Report["summary"]>, persist = true) => {
+    if (!onReportChange) return;
+    onReportChange({ summary: { ...report.summary, ...patch } }, { persist });
+  };
   const columns = visibleColumns(report);
   const summaryRegion = smartTemplate.tableRegions.summary;
   const strengthsRegion = smartTemplate.tableRegions.strengths;
@@ -1200,6 +1280,10 @@ function SummaryPage({
   const splitC = Math.max(1, dataSpan - splitA - splitB);
   const halfA = Math.max(1, Math.floor(dataSpan / 2));
   const halfB = Math.max(1, dataSpan - halfA - 1);
+  const contributionLabel =
+    report.summary.contributionLabel || `مدى مساهمة ${report.courseTitle || "النشاط"} في تطوير أدائك التدريسي`;
+  const effectivenessLabel =
+    report.summary.effectivenessLabel || `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${report.courseTitle || "النشاط"}`;
   return (
     <PageChrome
       assets={{ ...report.templateAssets, ...smartTemplate.assets }}
@@ -1245,11 +1329,20 @@ function SummaryPage({
           </tr>
           <tr>
             <th>{text("summary-head-impact", "ملخص نتائج قياس الأثر", labelDefaults)}</th>
-            <td colSpan={dataSpan}>{text("summary-value-impact", report.summary.impactSummary)}</td>
+            <td colSpan={dataSpan}>
+              {editableSummary("summary-value-impact", report.summary.impactSummary, bodyDefaults, (impactSummary, persist) =>
+                updateSummary({ impactSummary }, persist)
+              )}
+            </td>
           </tr>
           <tr>
             <th rowSpan={2}>
-              {text("summary-head-contribution", "مدى مساهمة الدروس التطبيقية في تطوير أدائك التدريسي", labelDefaults)}
+              {editableSummary(
+                "summary-head-contribution",
+                contributionLabel,
+                labelDefaults,
+                (contributionLabel, persist) => updateSummary({ contributionLabel }, persist)
+              )}
             </th>
             <th colSpan={splitA}>{text("summary-contribution-high-label", "تساهم بدرجة عالية", labelDefaults)}</th>
             <th colSpan={splitB}>{text("summary-contribution-medium-label", "تساهم بدرجة متوسطة", labelDefaults)}</th>
@@ -1267,7 +1360,14 @@ function SummaryPage({
             </td>
           </tr>
           <tr>
-            <th>{text("summary-head-effectiveness", "فعالية مدى فعالية الأساليب المستخدمة في تنفيذ الدروس التطبيقية", labelDefaults)}</th>
+            <th>
+              {editableSummary(
+                "summary-head-effectiveness",
+                effectivenessLabel,
+                labelDefaults,
+                (effectivenessLabel, persist) => updateSummary({ effectivenessLabel }, persist)
+              )}
+            </th>
             <td colSpan={dataSpan}>
               {percent("effectiveness", "فعالية الأساليب المستخدمة", report.summary.effectivenessHighPercent)}
             </td>
@@ -1943,6 +2043,7 @@ export default function ReportPreview({
         onSelectPercentage={selectPercentage}
         selectedNumber={selectedNumber}
         onSelectNumber={selectNumber}
+        onReportChange={onReportChange}
         onPrintSettingsChange={onPrintSettingsChange}
         onSmartTemplateChange={onSmartTemplateChange}
       />

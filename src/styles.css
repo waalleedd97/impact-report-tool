@@ -749,6 +749,28 @@ button:disabled {
   background: rgba(255, 255, 255, 0.86);
 }
 
+.summary-edit-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.summary-edit-target:focus {
+  outline: 0;
+  box-shadow: none;
+}
+
 .narrative-section {
   position: absolute;
   z-index: 1;

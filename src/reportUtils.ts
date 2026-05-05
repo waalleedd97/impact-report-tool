@@ -26,12 +26,12 @@ const effectivenessByLevel: Record<ImpactLevel, string[]> = {
   very_low: ["فاعلة بدرجة منخفضة", "فاعلة بدرجة منخفضة", "فاعلة بدرجة متوسطة", "فاعلة بدرجة منخفضة"]
 };
 
-const impactSummaryByLevel: Record<ImpactLevel, string> = {
-  very_high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة مرتفعة جداً",
-  high: "تُسهم الدروس التطبيقية في تحسن وتطوير الممارسات التدريسية بدرجة عالية",
-  medium: "تُسهم الدروس التطبيقية في تطوير الممارسات التدريسية بدرجة متوسطة",
-  low: "تحتاج الدروس التطبيقية إلى دعم أكبر لرفع أثرها على الممارسات التدريسية",
-  very_low: "تحتاج الدروس التطبيقية إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات التدريسية"
+const impactDegreeByLevel: Record<ImpactLevel, string> = {
+  very_high: "مرتفعة جداً",
+  high: "عالية",
+  medium: "متوسطة",
+  low: "منخفضة",
+  very_low: "منخفضة جداً"
 };
 
 const percentageRanges: Record<ImpactLevel, [number, number]> = {
@@ -93,6 +93,29 @@ function randomInt(min: number, max: number) {
 function randomPercent(level: ImpactLevel) {
   const [min, max] = percentageRanges[level];
   return randomInt(min, max);
+}
+
+function activityTitle(courseTitle: string) {
+  return courseTitle.trim() || "النشاط";
+}
+
+function contributionLabelForCourse(courseTitle: string) {
+  return `مدى مساهمة ${activityTitle(courseTitle)} في تطوير أدائك التدريسي`;
+}
+
+function effectivenessLabelForCourse(courseTitle: string) {
+  return `فعالية مدى فعالية الأساليب المستخدمة في تنفيذ ${activityTitle(courseTitle)}`;
+}
+
+function impactSummaryForCourse(courseTitle: string, level: ImpactLevel) {
+  const title = activityTitle(courseTitle);
+  if (level === "low") {
+    return `تحتاج ${title} إلى دعم أكبر لرفع أثرها على الممارسات التدريسية`;
+  }
+  if (level === "very_low") {
+    return `تحتاج ${title} إلى إعادة تنظيم ومتابعة دقيقة لرفع أثرها على الممارسات التدريسية`;
+  }
+  return `تُسهم ${title} في تحسين وتطوير الممارسات التدريسية بدرجة ${impactDegreeByLevel[level]}`;
 }
 
 function randomContributionOverrides(level: ImpactLevel) {
@@ -268,7 +291,9 @@ export function composeReport(input: {
       participantsCount,
       attendancePercentage: totalTeachers ? Math.round((participantsCount / totalTeachers) * 100) : 0,
       implementedLessons,
-      impactSummary: impactSummaryByLevel[input.level],
+      impactSummary: impactSummaryForCourse(input.courseTitle, input.level),
+      contributionLabel: contributionLabelForCourse(input.courseTitle),
+      effectivenessLabel: effectivenessLabelForCourse(input.courseTitle),
       contributionHighPercent: participantsCount ? Math.round((contributionHighCount / participantsCount) * 100) : 0,
       contributionMediumPercent: participantsCount ? Math.round((contributionMediumCount / participantsCount) * 100) : 0,
       contributionLowPercent: participantsCount ? Math.round((contributionLowCount / participantsCount) * 100) : 0,
