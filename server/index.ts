@@ -5,7 +5,7 @@ import express from "express";
 import multer from "multer";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -208,6 +208,26 @@ type GenerationOptions = {
   notes?: string;
 };
 
+type SubscriptionRecord = {
+  code: string;
+  durationDays: number;
+  accountId?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt?: string;
+  expiresAt?: string;
+  renewedFromCode?: string;
+  renewedToCode?: string;
+};
+
+type SubscriptionSession = {
+  code: string;
+  accountId: string;
+  expiresAt: string;
+  daysRemaining: number;
+};
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = process.env.VERCEL ? path.join("/tmp", "impact-report-tool") : path.join(rootDir, "data");
@@ -240,6 +260,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS reports_email_updated_idx
     ON reports (email, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS subscriptions (
+    code TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -288,6 +314,10 @@ function reportStorageFolder(email: string) {
 
 function reportStoragePath(email: string, reportId: string) {
   return `${reportStorageFolder(email)}/${safeStorageKey(reportId)}.json`;
+}
+
+function subscriptionStoragePath(code: string) {
+  return `subscriptions/${safeStorageKey(code)}.json`;
 }
 
 async function ensureSupabaseDataBucket() {
@@ -366,6 +396,30 @@ async function listReportsFromSupabaseStorage(email: string) {
 async function saveReportToSupabaseStorage(email: string, meta: StoredReportMeta) {
   await uploadSupabaseJson(reportStoragePath(email, meta.id), meta);
   return meta;
+}
+
+async function loadSubscriptionData(code: string) {
+  if (supabase) {
+    return downloadSupabaseJson<SubscriptionRecord>(subscriptionStoragePath(code));
+  }
+
+  const row = db.prepare("SELECT data FROM subscriptions WHERE code = ?").get(code) as { data: string } | undefined;
+  return row ? (JSON.parse(row.data) as SubscriptionRecord) : undefined;
+}
+
+async function saveSubscriptionData(subscription: SubscriptionRecord) {
+  const next = { ...subscription, updatedAt: nowIso() };
+  if (supabase) {
+    await uploadSupabaseJson(subscriptionStoragePath(next.code), next);
+    return next;
+  }
+
+  db.prepare(
+    `INSERT INTO subscriptions (code, data, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(code) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`
+  ).run(next.code, JSON.stringify(next), next.updatedAt);
+  return next;
 }
 
 async function loadProfileData(email: string) {
@@ -670,14 +724,147 @@ function emptyProfile(email: string): Profile {
 
 function normalizeEmail(value: unknown) {
   const email = String(value || "").trim().toLowerCase();
-  if (!email || !email.includes("@")) {
-    throw new Error("بريد غير صحيح");
+  if (!email || email.length > 180 || !/^[a-z0-9@._:-]+$/i.test(email)) {
+    throw new Error("معرّف الحساب غير صحيح");
   }
   return email;
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeSubscriptionCode(value: unknown) {
+  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!/^[A-Z0-9-]{8,40}$/.test(code)) {
+    throw new Error("رقم الاشتراك غير صحيح");
+  }
+  return code;
+}
+
+function addDaysIso(baseIso: string, days: number) {
+  const date = new Date(baseIso);
+  date.setUTCDate(date.getUTCDate() + Math.max(1, Math.round(days)));
+  return date.toISOString();
+}
+
+function isExpired(expiresAt?: string) {
+  return Boolean(expiresAt && Date.now() > Date.parse(expiresAt));
+}
+
+function daysRemaining(expiresAt: string) {
+  return Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 86_400_000));
+}
+
+function publicSubscriptionSession(subscription: SubscriptionRecord): SubscriptionSession {
+  if (!subscription.accountId || !subscription.expiresAt) {
+    throw new Error("اشتراك غير مفعل");
+  }
+  return {
+    code: subscription.code,
+    accountId: subscription.accountId,
+    expiresAt: subscription.expiresAt,
+    daysRemaining: daysRemaining(subscription.expiresAt)
+  };
+}
+
+function createReadableSubscriptionCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = randomBytes(10);
+  let raw = "";
+  for (const byte of bytes) {
+    raw += alphabet[byte % alphabet.length];
+  }
+  return `SMART-${raw.slice(0, 5)}-${raw.slice(5, 10)}`;
+}
+
+async function createSubscriptionRecord(input: { days: number; note?: string; accountId?: string }) {
+  const durationDays = Math.max(1, Math.min(730, Math.round(input.days || 30)));
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const code = createReadableSubscriptionCode();
+    const existing = await loadSubscriptionData(code);
+    if (existing) continue;
+    const createdAt = nowIso();
+    return saveSubscriptionData({
+      code,
+      durationDays,
+      accountId: input.accountId ? normalizeEmail(input.accountId) : undefined,
+      note: input.note?.trim().slice(0, 240) || undefined,
+      createdAt,
+      updatedAt: createdAt
+    });
+  }
+  throw new Error("تعذر إنشاء رقم اشتراك فريد");
+}
+
+async function activateOrLoadSubscription(code: string) {
+  const subscription = await loadSubscriptionData(code);
+  if (!subscription) {
+    throw new Error("رقم الاشتراك غير موجود");
+  }
+  if (subscription.expiresAt && isExpired(subscription.expiresAt)) {
+    const error = new Error("انتهى الاشتراك. أدخل رقم اشتراك جديد للربط بنفس البيانات.") as Error & {
+      expired?: boolean;
+      subscription?: SubscriptionRecord;
+    };
+    error.expired = true;
+    error.subscription = subscription;
+    throw error;
+  }
+  if (subscription.activatedAt && subscription.accountId && subscription.expiresAt) {
+    return subscription;
+  }
+
+  const activatedAt = nowIso();
+  return saveSubscriptionData({
+    ...subscription,
+    accountId: subscription.accountId || `account-${randomUUID()}`,
+    activatedAt,
+    expiresAt: addDaysIso(activatedAt, subscription.durationDays)
+  });
+}
+
+async function renewSubscriptionRecord(expiredCodeInput: unknown, newCodeInput: unknown) {
+  const expiredCode = normalizeSubscriptionCode(expiredCodeInput);
+  const newCode = normalizeSubscriptionCode(newCodeInput);
+  if (expiredCode === newCode) {
+    throw new Error("رقم الاشتراك الجديد يجب أن يكون مختلفاً");
+  }
+
+  const oldSubscription = await loadSubscriptionData(expiredCode);
+  if (!oldSubscription?.accountId) {
+    throw new Error("رقم الاشتراك السابق غير مرتبط ببيانات محفوظة");
+  }
+  const newSubscription = await loadSubscriptionData(newCode);
+  if (!newSubscription) {
+    throw new Error("رقم الاشتراك الجديد غير موجود");
+  }
+  if (newSubscription.activatedAt || newSubscription.accountId) {
+    throw new Error("رقم الاشتراك الجديد مستخدم من قبل");
+  }
+
+  const activatedAt = nowIso();
+  const savedNewSubscription = await saveSubscriptionData({
+    ...newSubscription,
+    accountId: oldSubscription.accountId,
+    activatedAt,
+    expiresAt: addDaysIso(activatedAt, newSubscription.durationDays),
+    renewedFromCode: oldSubscription.code
+  });
+  await saveSubscriptionData({
+    ...oldSubscription,
+    renewedToCode: savedNewSubscription.code
+  });
+  return savedNewSubscription;
+}
+
+async function requireSubscriptionAccess(req: express.Request, accountId: string) {
+  const code = normalizeSubscriptionCode(req.header("x-subscription-code"));
+  const subscription = await activateOrLoadSubscription(code);
+  if (subscription.accountId !== accountId) {
+    throw new Error("رقم الاشتراك لا يطابق هذا الحساب");
+  }
+  return subscription;
 }
 
 function envNumber(name: string, fallback: number) {
@@ -1575,9 +1762,75 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.post("/api/subscriptions/login", async (req, res) => {
+  try {
+    const code = normalizeSubscriptionCode(req.body.code);
+    const subscription = await activateOrLoadSubscription(code);
+    const session = publicSubscriptionSession(subscription);
+    res.json({
+      accountId: session.accountId,
+      subscription: session
+    });
+  } catch (error) {
+    const typed = error as Error & { expired?: boolean; subscription?: SubscriptionRecord };
+    res.status(typed.expired ? 403 : 400).json({
+      error: typed.message || "تعذر تسجيل الدخول",
+      expired: Boolean(typed.expired),
+      code: typed.subscription?.code,
+      expiresAt: typed.subscription?.expiresAt
+    });
+  }
+});
+
+app.post("/api/subscriptions/renew", async (req, res) => {
+  try {
+    const subscription = await renewSubscriptionRecord(req.body.expiredCode, req.body.newCode);
+    const session = publicSubscriptionSession(subscription);
+    res.json({
+      accountId: session.accountId,
+      subscription: session
+    });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تجديد الاشتراك" });
+  }
+});
+
+app.post("/api/admin/subscriptions", async (req, res) => {
+  try {
+    const adminSecret = process.env.SUBSCRIPTION_ADMIN_SECRET;
+    if (!adminSecret) {
+      res.status(500).json({ error: "لم يتم ضبط سر إنشاء الاشتراكات على الخادم" });
+      return;
+    }
+    if (req.header("x-admin-secret") !== adminSecret) {
+      res.status(401).json({ error: "صلاحية غير كافية" });
+      return;
+    }
+    const quantity = Math.max(1, Math.min(50, Math.round(Number(req.body.quantity) || 1)));
+    const days = Math.max(1, Math.min(730, Math.round(Number(req.body.days) || 30)));
+    const note = String(req.body.note || "").trim();
+    const accountId = req.body.accountId ? String(req.body.accountId) : undefined;
+    const subscriptions: SubscriptionRecord[] = [];
+    for (let index = 0; index < quantity; index += 1) {
+      subscriptions.push(await createSubscriptionRecord({ days, note, accountId }));
+    }
+    res.json({
+      subscriptions: subscriptions.map((subscription) => ({
+        code: subscription.code,
+        durationDays: subscription.durationDays,
+        accountId: subscription.accountId,
+        createdAt: subscription.createdAt
+      }))
+    });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر إنشاء رقم الاشتراك" });
+  }
+});
+
 app.get("/api/profile", async (req, res) => {
   try {
     const email = normalizeEmail(req.query.email);
+    await requireSubscriptionAccess(req, email);
     const profile = await loadProfileData(email);
     if (!profile) {
       res.json(emptyProfile(email));
@@ -1592,6 +1845,7 @@ app.get("/api/profile", async (req, res) => {
 app.put("/api/profile", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
     const profile = { ...emptyProfile(email), ...req.body.profile, email };
     res.json(await saveProfileData(email, profile));
   } catch (error) {
@@ -1602,6 +1856,7 @@ app.put("/api/profile", async (req, res) => {
 app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
     if (!req.file) {
       res.status(400).json({ error: "لم يتم رفع ملف PDF" });
       return;
@@ -1642,6 +1897,7 @@ app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
 app.post("/api/reports/generate", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
     const teachers = Array.isArray(req.body.teachers) ? req.body.teachers : [];
     if (!teachers.length) {
       res.status(400).json({ error: "لا توجد أسماء معلمات" });
@@ -1687,6 +1943,7 @@ app.post("/api/reports/generate", async (req, res) => {
 app.get("/api/reports", async (req, res) => {
   try {
     const email = normalizeEmail(req.query.email);
+    await requireSubscriptionAccess(req, email);
     res.json(await listReportData(email));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تحميل التقارير" });
@@ -1696,6 +1953,7 @@ app.get("/api/reports", async (req, res) => {
 app.post("/api/reports", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
     res.json(await upsertReportData(email, req.body.report as Report));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
@@ -1705,6 +1963,7 @@ app.post("/api/reports", async (req, res) => {
 app.put("/api/reports/:id", async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
     res.json(await upsertReportData(email, { ...(req.body.report as Report), id: req.params.id }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });

@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -b",
+    "subscription:create": "tsx scripts/create_subscription.ts",
     "migrate:supabase": "tsx scripts/migrate_sqlite_to_supabase.ts"
   },
   "dependencies": {

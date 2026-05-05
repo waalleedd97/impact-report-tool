@@ -18,6 +18,8 @@ import {
   importPdf,
   listReports,
   loadProfile,
+  loginWithSubscription,
+  renewSubscription,
   saveProfile,
   saveReport
 } from "./api";
@@ -32,10 +34,12 @@ import type {
   Report,
   SmartTemplate,
   StoredReportMeta,
+  SubscriptionLoginResult,
+  SubscriptionSession,
   Teacher
 } from "./types";
 
-const rememberedEmailKey = "impact-report-email";
+const rememberedSubscriptionCodeKey = "smart-editor-subscription-code";
 const appName = "المحرر الذكي";
 const appLogoSrc = "/smart-editor-logo.png";
 
@@ -193,8 +197,14 @@ function normalizeProfile(email: string, loadedProfile: Partial<Profile>): Profi
 }
 
 export default function App() {
-  const [emailInput, setEmailInput] = useState(localStorage.getItem(rememberedEmailKey) || "");
-  const [email, setEmail] = useState(localStorage.getItem(rememberedEmailKey) || "");
+  const [subscriptionCodeInput, setSubscriptionCodeInput] = useState(
+    localStorage.getItem(rememberedSubscriptionCodeKey) || ""
+  );
+  const [subscriptionCode, setSubscriptionCode] = useState(localStorage.getItem(rememberedSubscriptionCodeKey) || "");
+  const [renewalCodeInput, setRenewalCodeInput] = useState("");
+  const [expiredSubscriptionCode, setExpiredSubscriptionCode] = useState("");
+  const [subscription, setSubscription] = useState<SubscriptionSession | null>(null);
+  const [accountId, setAccountId] = useState("");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [courseTitle, setCourseTitle] = useState("الدروس التطبيقية");
   const [level, setLevel] = useState<ImpactLevel>("high");
@@ -208,31 +218,57 @@ export default function App() {
   const [importedNames, setImportedNames] = useState<Teacher[] | null>(null);
 
   useEffect(() => {
-    if (!email) return;
+    if (!subscriptionCode) return;
+    setBusy("التحقق من الاشتراك");
+    loginWithSubscription(subscriptionCode)
+      .then((result) => {
+        completeSubscriptionLogin(result);
+      })
+      .catch((error) => {
+        const code = normalizeSubscriptionInput(subscriptionCode);
+        if ((error as Error & { expired?: boolean }).expired) {
+          setExpiredSubscriptionCode(code);
+        }
+        localStorage.removeItem(rememberedSubscriptionCodeKey);
+        setSubscriptionCode("");
+        setAccountId("");
+        setSubscription(null);
+        setProfile(null);
+        setReports([]);
+        setMessage(error instanceof Error ? error.message : "تعذر التحقق من الاشتراك");
+      })
+      .finally(() => setBusy(""));
+  }, [subscriptionCode]);
+
+  useEffect(() => {
+    if (!accountId || !subscription?.code) return;
     setBusy("تحميل الملف الشخصي");
-    Promise.all([loadProfile(email), listReports(email)])
+    Promise.all([loadProfile(accountId, subscription.code), listReports(accountId, subscription.code)])
       .then(([loadedProfile, loadedReports]) => {
-        const localProfile = readJsonBackup<Profile>(profileBackupKey(email));
-        const normalizedRemote = normalizeProfile(email, loadedProfile);
-        const normalizedLocal = localProfile ? normalizeProfile(email, localProfile) : null;
+        const localProfile = readJsonBackup<Profile>(profileBackupKey(accountId));
+        const normalizedRemote = normalizeProfile(accountId, loadedProfile);
+        const normalizedLocal = localProfile ? normalizeProfile(accountId, localProfile) : null;
         const mergedProfile = preferLocalProfile(normalizedRemote, normalizedLocal);
-        const mergedReports = mergeReportBackups(loadedReports, readJsonBackup<StoredReportMeta[]>(reportsBackupKey(email)));
+        const mergedReports = mergeReportBackups(
+          loadedReports,
+          readJsonBackup<StoredReportMeta[]>(reportsBackupKey(accountId))
+        );
         setProfile(mergedProfile);
         setReports(mergedReports);
-        writeJsonBackup(profileBackupKey(email), mergedProfile);
-        writeJsonBackup(reportsBackupKey(email), mergedReports);
+        writeJsonBackup(profileBackupKey(accountId), mergedProfile);
+        writeJsonBackup(reportsBackupKey(accountId), mergedReports);
         if (!mergedProfile.currentReport && mergedProfile.teachers.length) {
           const reportProfile = {
             ...mergedProfile,
             currentReport: reportFromProfile(mergedProfile, courseTitle, level)
           };
           setProfile(reportProfile);
-          writeJsonBackup(profileBackupKey(email), reportProfile);
+          writeJsonBackup(profileBackupKey(accountId), reportProfile);
         }
       })
       .catch((error) => setMessage(error.message))
       .finally(() => setBusy(""));
-  }, [email]);
+  }, [accountId, subscription?.code]);
 
   const currentReport = profile?.currentReport;
 
@@ -242,21 +278,61 @@ export default function App() {
   );
 
   async function persistProfile(nextProfile: Profile) {
+    if (!subscription?.code) {
+      throw new Error("يلزم تسجيل الدخول برقم اشتراك");
+    }
     setProfile(nextProfile);
     writeJsonBackup(profileBackupKey(nextProfile.email), nextProfile);
-    await saveProfile(nextProfile);
+    await saveProfile(nextProfile, subscription.code);
+  }
+
+  function normalizeSubscriptionInput(value: string) {
+    return value.trim().toUpperCase().replace(/\s+/g, "");
+  }
+
+  function completeSubscriptionLogin(result: SubscriptionLoginResult) {
+    localStorage.setItem(rememberedSubscriptionCodeKey, result.subscription.code);
+    setSubscriptionCodeInput(result.subscription.code);
+    setSubscription(result.subscription);
+    setAccountId(result.accountId);
+    setExpiredSubscriptionCode("");
+    setRenewalCodeInput("");
+    setMessage("");
   }
 
   function login(event: React.FormEvent) {
     event.preventDefault();
-    const normalized = emailInput.trim().toLowerCase();
-    if (!normalized.includes("@")) {
-      setMessage("أدخل بريد صحيح");
+    const normalized = normalizeSubscriptionInput(subscriptionCodeInput);
+    if (normalized.length < 8) {
+      setMessage("أدخل رقم اشتراك صحيح");
       return;
     }
-    localStorage.setItem(rememberedEmailKey, normalized);
-    setEmail(normalized);
+    setProfile(null);
+    setSubscription(null);
+    setAccountId("");
+    setSubscriptionCode(normalized);
     setMessage("");
+  }
+
+  async function renewExpiredSubscription(event: React.FormEvent) {
+    event.preventDefault();
+    const oldCode = normalizeSubscriptionInput(expiredSubscriptionCode || subscriptionCodeInput);
+    const newCode = normalizeSubscriptionInput(renewalCodeInput);
+    if (!oldCode || newCode.length < 8) {
+      setMessage("أدخل رقم الاشتراك الجديد");
+      return;
+    }
+    setBusy("تجديد الاشتراك");
+    setMessage("");
+    try {
+      const result = await renewSubscription(oldCode, newCode);
+      setSubscriptionCode(newCode);
+      completeSubscriptionLogin(result);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر تجديد الاشتراك");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function handleImport(file?: File) {
@@ -264,7 +340,7 @@ export default function App() {
     setBusy("استيراد ملف PDF");
     setMessage("");
     try {
-      const imported = await importPdf(profile.email, file);
+      const imported = await importPdf(profile.email, file, subscription?.code || "");
       const importedSmartTemplate = imported.smartTemplateDraft;
       const smartTemplates = importedSmartTemplate
         ? [
@@ -318,14 +394,17 @@ export default function App() {
       if (agentNotes.trim()) {
         generationOptions.notes = agentNotes.trim();
       }
-      const result = await generateReport({
-        email: profile.email,
-        courseTitle,
-        level,
-        teachers: profile.teachers,
-        profile,
-        generationOptions
-      });
+      const result = await generateReport(
+        {
+          email: profile.email,
+          courseTitle,
+          level,
+          teachers: profile.teachers,
+          profile,
+          generationOptions
+        },
+        subscription?.code || ""
+      );
       const nextProfile = {
         ...profile,
         currentReport: normalizeReport(result.report, profile.printSettings, activeSmartTemplate(profile))
@@ -343,7 +422,7 @@ export default function App() {
     if (!profile?.currentReport) return;
     setBusy("حفظ التقرير");
     try {
-      const saved = await saveReport(profile.currentReport);
+      const saved = await saveReport(profile.currentReport, subscription?.code || "");
       setReports((items) => {
         const nextReports = [saved, ...items.filter((item) => item.id !== saved.id)];
         writeJsonBackup(reportsBackupKey(profile.email), nextReports);
@@ -452,7 +531,7 @@ export default function App() {
 
     setProfile(nextProfile);
     if (options.persist !== false) {
-      void saveProfile(nextProfile).catch((error) => {
+      void saveProfile(nextProfile, subscription?.code || "").catch((error) => {
         setMessage(error instanceof Error ? error.message : "تعذر حفظ القالب الذكي");
       });
     }
@@ -495,7 +574,7 @@ export default function App() {
 
     setProfile(nextProfile);
     if (options.persist !== false) {
-      void saveProfile(nextProfile).catch((error) => {
+      void saveProfile(nextProfile, subscription?.code || "").catch((error) => {
         setMessage(error instanceof Error ? error.message : "تعذر حفظ إعدادات الطباعة");
       });
     }
@@ -523,13 +602,13 @@ export default function App() {
 
     setProfile(nextProfile);
     if (options.persist !== false) {
-      void saveProfile(nextProfile).catch((error) => {
+      void saveProfile(nextProfile, subscription?.code || "").catch((error) => {
         setMessage(error instanceof Error ? error.message : "تعذر حفظ التقرير");
       });
     }
   }
 
-  if (!email) {
+  if (!accountId) {
     return (
       <main className="login-screen" dir="rtl">
         <form className="login-panel" onSubmit={login}>
@@ -538,16 +617,42 @@ export default function App() {
             <h1>{appName}</h1>
           </div>
           <label>
-            البريد
+            رقم الاشتراك
             <input
               dir="ltr"
-              type="email"
-              value={emailInput}
-              onChange={(event) => setEmailInput(event.target.value)}
-              placeholder="name@example.com"
+              type="text"
+              value={subscriptionCodeInput}
+              onChange={(event) => setSubscriptionCodeInput(event.target.value)}
+              placeholder="SMART-XXXX-XXXX"
+              autoComplete="off"
             />
           </label>
           <button type="submit">دخول</button>
+          {expiredSubscriptionCode ? (
+            <div className="renewal-box">
+              <p>انتهى هذا الاشتراك. أدخل رقم اشتراك جديد لربطه بنفس بياناتك السابقة.</p>
+              <label>
+                رقم الاشتراك الجديد
+                <input
+                  dir="ltr"
+                  type="text"
+                  value={renewalCodeInput}
+                  onChange={(event) => setRenewalCodeInput(event.target.value)}
+                  placeholder="SMART-XXXX-XXXX"
+                  autoComplete="off"
+                />
+              </label>
+              <button type="button" onClick={renewExpiredSubscription} disabled={Boolean(busy)}>
+                ربط وتجديد
+              </button>
+            </div>
+          ) : null}
+          {busy ? (
+            <p className="busy-line login-busy">
+              <Loader2 className="spin" size={16} />
+              {busy}
+            </p>
+          ) : null}
           {message ? <p className="status-message error">{message}</p> : null}
         </form>
       </main>
@@ -571,14 +676,18 @@ export default function App() {
             <img src={appLogoSrc} alt={appName} className="app-logo" />
             <div>
               <h1>{appName}</h1>
-              <p>{email}</p>
+              <p>{subscription ? `${subscription.code} • ${subscription.daysRemaining} يوم` : accountId}</p>
             </div>
           </div>
           <button
             className="icon-button"
             onClick={() => {
-              localStorage.removeItem(rememberedEmailKey);
-              setEmail("");
+              localStorage.removeItem(rememberedSubscriptionCodeKey);
+              setSubscriptionCode("");
+              setSubscriptionCodeInput("");
+              setSubscription(null);
+              setAccountId("");
+              setExpiredSubscriptionCode("");
               setProfile(null);
             }}
             title="خروج"

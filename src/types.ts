@@ -174,6 +174,18 @@ export type GenerationOptions = {
   notes?: string;
 };
 
+export type SubscriptionSession = {
+  code: string;
+  accountId: string;
+  expiresAt: string;
+  daysRemaining: number;
+};
+
+export type SubscriptionLoginResult = {
+  accountId: string;
+  subscription: SubscriptionSession;
+};
+
 export type Profile = {
   email: string;
   schoolSettings: SchoolSettings;
