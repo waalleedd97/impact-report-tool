@@ -15,26 +15,36 @@ import { jsPDF } from "jspdf";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteReport,
+  deletePdfDocument,
+  generatePdfDocument,
   generateReport,
+  importPdfDocument,
   importPdf,
+  listPdfDocuments,
   listReports,
   loadProfile,
   loginWithSubscription,
   renewSubscription,
+  savePdfDocument,
   saveProfile,
-  saveReport
+  saveReport,
+  uploadPdfDocumentAsset
 } from "./api";
+import PdfEditor from "./components/PdfEditor";
 import ReportPreview from "./components/ReportPreview";
 import { createDefaultSmartTemplate, defaultDetailColumnIds, defaultPrintSettings, emptyProfile } from "./defaults";
+import { buildPdfEditorDocument } from "./pdfEditorImport";
 import { reportFromProfile } from "./reportUtils";
 import type {
   GenerationOptions,
   DetailColumnId,
   ImpactLevel,
+  PdfEditorDocument,
   PrintSettings,
   Profile,
   Report,
   SmartTemplate,
+  StoredPdfEditorDocumentMeta,
   StoredReportMeta,
   TemplateAssets,
   SubscriptionLoginResult,
@@ -245,8 +255,12 @@ export default function App() {
   const [improvementCount, setImprovementCount] = useState("");
   const [benefitColumnCount, setBenefitColumnCount] = useState("");
   const [agentNotes, setAgentNotes] = useState("");
-  const [activeTab, setActiveTab] = useState<"report" | "teachers" | "settings" | "saved">("report");
+  const [activeTab, setActiveTab] = useState<"report" | "pdf" | "teachers" | "settings" | "saved">("report");
   const [reports, setReports] = useState<StoredReportMeta[]>([]);
+  const [pdfDocuments, setPdfDocuments] = useState<StoredPdfEditorDocumentMeta[]>([]);
+  const [currentPdfDocument, setCurrentPdfDocument] = useState<PdfEditorDocument | undefined>();
+  const [pdfActivityTitle, setPdfActivityTitle] = useState("");
+  const [pdfAgentNotes, setPdfAgentNotes] = useState("");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [importedNames, setImportedNames] = useState<Teacher[] | null>(null);
@@ -269,6 +283,8 @@ export default function App() {
         setSubscription(null);
         setProfile(null);
         setReports([]);
+        setPdfDocuments([]);
+        setCurrentPdfDocument(undefined);
         setMessage(error instanceof Error ? error.message : "تعذر التحقق من الاشتراك");
       })
       .finally(() => setBusy(""));
@@ -277,8 +293,12 @@ export default function App() {
   useEffect(() => {
     if (!accountId || !subscription?.code) return;
     setBusy("تحميل الملف الشخصي");
-    Promise.all([loadProfile(accountId, subscription.code), listReports(accountId, subscription.code)])
-      .then(([loadedProfile, loadedReports]) => {
+    Promise.all([
+      loadProfile(accountId, subscription.code),
+      listReports(accountId, subscription.code),
+      listPdfDocuments(accountId, subscription.code)
+    ])
+      .then(([loadedProfile, loadedReports, loadedPdfDocuments]) => {
         const localProfile = readJsonBackup<Profile>(profileBackupKey(accountId));
         const normalizedRemote = normalizeProfile(accountId, loadedProfile);
         const normalizedLocal = localProfile ? normalizeProfile(accountId, localProfile) : null;
@@ -289,6 +309,8 @@ export default function App() {
         );
         setProfile(mergedProfile);
         setReports(mergedReports);
+        setPdfDocuments(loadedPdfDocuments);
+        setCurrentPdfDocument(loadedPdfDocuments[0]?.document);
         writeJsonBackup(profileBackupKey(accountId), mergedProfile);
         writeJsonBackup(reportsBackupKey(accountId), mergedReports);
         if (!mergedProfile.currentReport && mergedProfile.teachers.length) {
@@ -403,6 +425,118 @@ export default function App() {
       setMessage(`تم استخراج ${nextProfile.teachers.length} اسم`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر استيراد الملف");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleGenericPdfImport(file?: File) {
+    if (!file || !profile || !subscription?.code) return;
+    setBusy("قراءة ملف PDF");
+    setMessage("");
+    try {
+      const document = await buildPdfEditorDocument({
+        file,
+        email: profile.email,
+        uploadAsset: async ({ documentId, pageId, file, filename }) => {
+          const result = await uploadPdfDocumentAsset(
+            {
+              email: profile.email,
+              documentId,
+              pageId,
+              file,
+              filename
+            },
+            subscription.code
+          );
+          return result.url;
+        },
+        onProgress: setBusy
+      });
+      const saved = await importPdfDocument(document, subscription.code);
+      setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      setCurrentPdfDocument(saved.document);
+      setPdfActivityTitle(saved.document.title);
+      setActiveTab("pdf");
+      setMessage(
+        saved.document.fields.length || saved.document.tables.length
+          ? `تم تجهيز ${saved.document.pages.length} صفحة و${saved.document.fields.length} خانة و${saved.document.tables.length} جدول`
+          : "تم تجهيز الصفحات كخلفية. الملف يبدو ممسوحاً؛ أضف الخانات والجداول يدوياً."
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر تجهيز محرر PDF");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleSavePdfDocument() {
+    if (!currentPdfDocument || !subscription?.code) return;
+    setBusy("حفظ مستند PDF");
+    setMessage("");
+    try {
+      const saved = await savePdfDocument(currentPdfDocument, subscription.code);
+      setPdfDocuments((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      setCurrentPdfDocument(saved.document);
+      setMessage("تم حفظ مستند PDF");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر حفظ مستند PDF");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleGeneratePdfDocument() {
+    if (!currentPdfDocument || !profile || !subscription?.code) return;
+    setBusy("تعبئة مستند PDF بالذكاء الاصطناعي");
+    setMessage("");
+    try {
+      const result = await generatePdfDocument(
+        {
+          email: profile.email,
+          document: currentPdfDocument,
+          activityTitle: pdfActivityTitle || currentPdfDocument.title,
+          notes: pdfAgentNotes
+        },
+        subscription.code
+      );
+      setCurrentPdfDocument(result.document);
+      setPdfDocuments((items) => [
+        {
+          id: result.document.id,
+          email: result.document.email,
+          title: result.document.title,
+          sourceFilename: result.document.sourceFilename,
+          createdAt: result.document.createdAt,
+          updatedAt: result.document.updatedAt,
+          document: result.document
+        },
+        ...items.filter((item) => item.id !== result.document.id)
+      ]);
+      setMessage("تمت تعبئة مستند PDF");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر تعبئة مستند PDF");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeletePdfDocument(item: StoredPdfEditorDocumentMeta) {
+    if (!profile || !subscription?.code) return;
+    const confirmed = window.confirm(`حذف "${item.title}" من مستندات PDF؟`);
+    if (!confirmed) return;
+    setBusy("حذف مستند PDF");
+    setMessage("");
+    try {
+      await deletePdfDocument(item.id, profile.email, subscription.code);
+      setPdfDocuments((items) => items.filter((document) => document.id !== item.id));
+      if (currentPdfDocument?.id === item.id) {
+        const next = pdfDocuments.find((document) => document.id !== item.id);
+        setCurrentPdfDocument(next?.document);
+      }
+      setMessage("تم حذف مستند PDF");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر حذف مستند PDF");
     } finally {
       setBusy("");
     }
@@ -796,6 +930,8 @@ export default function App() {
               setAccountId("");
               setExpiredSubscriptionCode("");
               setProfile(null);
+              setPdfDocuments([]);
+              setCurrentPdfDocument(undefined);
             }}
             title="خروج"
           >
@@ -806,6 +942,7 @@ export default function App() {
         <nav className="tabs">
           {[
             ["report", "التقرير"],
+            ["pdf", "محرر PDF"],
             ["teachers", "المعلمات"],
             ["settings", "الإعدادات"],
             ["saved", "المحفوظات"]
@@ -932,6 +1069,73 @@ export default function App() {
           </section>
         ) : null}
 
+        {activeTab === "pdf" ? (
+          <section className="panel-section pdf-control-section">
+            <label className="file-picker">
+              <Upload size={17} />
+              رفع PDF جديد للتحرير
+              <input type="file" accept="application/pdf" onChange={(event) => handleGenericPdfImport(event.target.files?.[0])} />
+            </label>
+            <label>
+              عنوان النشاط أو الغرض
+              <input
+                value={pdfActivityTitle}
+                onChange={(event) => setPdfActivityTitle(event.target.value)}
+                placeholder="مثال: ورشة عمل بنود الأداء الوظيفي"
+              />
+            </label>
+            <label>
+              ملاحظات للذكاء الاصطناعي
+              <textarea
+                value={pdfAgentNotes}
+                onChange={(event) => setPdfAgentNotes(event.target.value)}
+                placeholder="اكتب تعليمات التعبئة المطلوبة لهذا المستند."
+              />
+            </label>
+            <div className="action-grid">
+              <button onClick={handleGeneratePdfDocument} disabled={!currentPdfDocument || Boolean(busy)}>
+                <Sparkles size={17} />
+                تعبئة
+              </button>
+              <button onClick={handleSavePdfDocument} disabled={!currentPdfDocument || Boolean(busy)}>
+                <Save size={17} />
+                حفظ
+              </button>
+            </div>
+            <div className="pdf-document-list">
+              <span>مستندات PDF</span>
+              {pdfDocuments.length ? (
+                pdfDocuments.map((item) => (
+                  <div className="saved-item" key={item.id}>
+                    <button
+                      className={currentPdfDocument?.id === item.id ? "saved-report-button active" : "saved-report-button"}
+                      onClick={() => {
+                        setCurrentPdfDocument(item.document);
+                        setPdfActivityTitle(item.document.title);
+                      }}
+                    >
+                      <FileText size={16} />
+                      <span>{item.title}</span>
+                      <small>{new Date(item.updatedAt).toLocaleDateString("ar-SA")}</small>
+                    </button>
+                    <button
+                      className="saved-delete-button"
+                      onClick={() => void handleDeletePdfDocument(item)}
+                      title="حذف مستند PDF"
+                      aria-label={`حذف ${item.title}`}
+                      disabled={Boolean(busy)}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="muted">لا توجد مستندات PDF محفوظة</p>
+              )}
+            </div>
+          </section>
+        ) : null}
+
         {activeTab === "teachers" ? (
           <TeacherEditor
             profile={profile}
@@ -1000,12 +1204,22 @@ export default function App() {
       </aside>
 
       <section className="preview-panel">
-        <ReportPreview
-          report={currentReport}
-          onPrintSettingsChange={applyPrintSettings}
-          onReportChange={applyReportPatch}
-          onSmartTemplateChange={applySmartTemplate}
-        />
+        {activeTab === "pdf" ? (
+          <PdfEditor
+            document={currentPdfDocument}
+            onChange={setCurrentPdfDocument}
+            onSave={handleSavePdfDocument}
+            onGenerate={handleGeneratePdfDocument}
+            disabled={Boolean(busy)}
+          />
+        ) : (
+          <ReportPreview
+            report={currentReport}
+            onPrintSettingsChange={applyPrintSettings}
+            onReportChange={applyReportPatch}
+            onSmartTemplateChange={applySmartTemplate}
+          />
+        )}
       </section>
     </main>
   );

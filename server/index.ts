@@ -215,6 +215,94 @@ type StoredReportMeta = {
   report: Report;
 };
 
+type PdfEditorTextAlign = "right" | "center" | "left";
+
+type PdfEditorField = {
+  id: string;
+  pageId: string;
+  type: "text" | "checkmark";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  originalText?: string;
+  fontSize: number;
+  fontFamily: string;
+  fontWeight: number;
+  color: string;
+  textAlign: PdfEditorTextAlign;
+  direction: "rtl" | "ltr" | "auto";
+};
+
+type PdfEditorTableColumn = {
+  id: string;
+  width: number;
+};
+
+type PdfEditorTableCell = {
+  id: string;
+  columnId: string;
+  text: string;
+  originalText?: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  textAlign: PdfEditorTextAlign;
+};
+
+type PdfEditorTableRow = {
+  id: string;
+  height: number;
+  cells: PdfEditorTableCell[];
+};
+
+type PdfEditorTable = {
+  id: string;
+  pageId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  columns: PdfEditorTableColumn[];
+  rows: PdfEditorTableRow[];
+  borderColor: string;
+  backgroundColor: string;
+};
+
+type PdfEditorPage = {
+  id: string;
+  pageNumber: number;
+  width: number;
+  height: number;
+  widthMm: number;
+  heightMm: number;
+  backgroundUrl: string;
+  textLayerExtracted: boolean;
+};
+
+type PdfEditorDocument = {
+  id: string;
+  email: string;
+  title: string;
+  sourceFilename: string;
+  createdAt: string;
+  updatedAt: string;
+  pages: PdfEditorPage[];
+  fields: PdfEditorField[];
+  tables: PdfEditorTable[];
+};
+
+type StoredPdfEditorDocumentMeta = {
+  id: string;
+  email: string;
+  title: string;
+  sourceFilename: string;
+  createdAt: string;
+  updatedAt: string;
+  document: PdfEditorDocument;
+};
+
 type GenerationOptions = {
   strengthCount?: number;
   improvementCount?: number;
@@ -282,6 +370,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS reports_email_updated_idx
     ON reports (email, updated_at DESC);
 
+  CREATE TABLE IF NOT EXISTS pdf_documents (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_filename TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS pdf_documents_email_updated_idx
+    ON pdf_documents (email, updated_at DESC);
+
   CREATE TABLE IF NOT EXISTS subscriptions (
     code TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -335,6 +436,14 @@ function reportStorageFolder(email: string) {
 
 function reportStoragePath(email: string, reportId: string) {
   return `${reportStorageFolder(email)}/${safeStorageKey(reportId)}.json`;
+}
+
+function pdfDocumentStorageFolder(email: string) {
+  return `pdf-documents/${safeStorageKey(email)}`;
+}
+
+function pdfDocumentStoragePath(email: string, documentId: string) {
+  return `${pdfDocumentStorageFolder(email)}/${safeStorageKey(documentId)}.json`;
 }
 
 function subscriptionStoragePath(code: string) {
@@ -639,6 +748,210 @@ async function deleteReportData(email: string, reportId: string) {
 
   db.prepare("DELETE FROM reports WHERE email = ? AND id = ?").run(email, safeReportId);
   return { id: safeReportId };
+}
+
+function clampFinite(value: unknown, min: number, max: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
+function sanitizePdfTextAlign(value: unknown): PdfEditorTextAlign {
+  return value === "left" || value === "center" ? value : "right";
+}
+
+function sanitizePdfDirection(value: unknown): PdfEditorField["direction"] {
+  return value === "ltr" || value === "rtl" ? value : "auto";
+}
+
+function sanitizePdfEditorDocument(email: string, input: Partial<PdfEditorDocument>, forcedId?: string): PdfEditorDocument {
+  const now = nowIso();
+  const id = safeStorageKey(forcedId || input.id || randomUUID()) || randomUUID();
+  const pages = Array.isArray(input.pages)
+    ? input.pages.slice(0, 80).map((page, index) => {
+        const pageId = String(page?.id || `page-${index + 1}`).slice(0, 80);
+        const width = clampFinite(page?.width, 120, 5000, 595);
+        const height = clampFinite(page?.height, 120, 5000, 842);
+        return {
+          id: pageId,
+          pageNumber: Math.max(1, Math.round(Number(page?.pageNumber) || index + 1)),
+          width,
+          height,
+          widthMm: clampFinite(page?.widthMm, 20, 2000, width * 25.4 / 72),
+          heightMm: clampFinite(page?.heightMm, 20, 2000, height * 25.4 / 72),
+          backgroundUrl: String(page?.backgroundUrl || "").slice(0, 1000),
+          textLayerExtracted: Boolean(page?.textLayerExtracted)
+        };
+      })
+    : [];
+  const validPageIds = new Set(pages.map((page) => page.id));
+  const fields = Array.isArray(input.fields)
+    ? input.fields.slice(0, 3000).filter((field) => validPageIds.has(String(field?.pageId))).map((field, index) => ({
+        id: String(field?.id || `field-${index + 1}`).slice(0, 100),
+        pageId: String(field?.pageId),
+        type: field?.type === "checkmark" ? "checkmark" as const : "text" as const,
+        x: clampFinite(field?.x, -500, 6000, 24),
+        y: clampFinite(field?.y, -500, 6000, 24),
+        width: clampFinite(field?.width, 4, 5000, 80),
+        height: clampFinite(field?.height, 4, 5000, 24),
+        text: String(field?.text || "").slice(0, 1000),
+        originalText: field?.originalText === undefined ? undefined : String(field.originalText || "").slice(0, 1000),
+        fontSize: clampFinite(field?.fontSize, 4, 120, 13),
+        fontFamily: String(field?.fontFamily || "Arial, Tahoma, sans-serif").slice(0, 160),
+        fontWeight: Math.round(clampFinite(field?.fontWeight, 100, 900, 400)),
+        color: /^#[0-9a-f]{6}$/i.test(String(field?.color)) ? String(field?.color) : "#111111",
+        textAlign: sanitizePdfTextAlign(field?.textAlign),
+        direction: sanitizePdfDirection(field?.direction)
+      }))
+    : [];
+  const tables = Array.isArray(input.tables)
+    ? input.tables.slice(0, 240).filter((table) => validPageIds.has(String(table?.pageId))).map((table, tableIndex) => {
+        const columns = Array.isArray(table?.columns)
+          ? table.columns.slice(0, 30).map((column, index) => ({
+              id: String(column?.id || `col-${index + 1}`).slice(0, 80),
+              width: clampFinite(column?.width, 8, 2000, 80)
+            }))
+          : [];
+        const validColumnIds = new Set(columns.map((column) => column.id));
+        const rows = Array.isArray(table?.rows)
+          ? table.rows.slice(0, 300).map((row, rowIndex) => ({
+              id: String(row?.id || `row-${rowIndex + 1}`).slice(0, 80),
+              height: clampFinite(row?.height, 6, 600, 28),
+              cells: Array.isArray(row?.cells)
+                ? row.cells
+                    .filter((cell) => validColumnIds.has(String(cell?.columnId)))
+                    .slice(0, 30)
+                    .map((cell, cellIndex) => ({
+                      id: String(cell?.id || `cell-${rowIndex + 1}-${cellIndex + 1}`).slice(0, 100),
+                      columnId: String(cell?.columnId),
+                      text: String(cell?.text || "").slice(0, 1500),
+                      originalText: cell?.originalText === undefined ? undefined : String(cell.originalText || "").slice(0, 1500),
+                      fontSize: clampFinite(cell?.fontSize, 4, 80, 12),
+                      fontWeight: Math.round(clampFinite(cell?.fontWeight, 100, 900, 400)),
+                      color: /^#[0-9a-f]{6}$/i.test(String(cell?.color)) ? String(cell?.color) : "#111111",
+                      textAlign: sanitizePdfTextAlign(cell?.textAlign)
+                    }))
+                : []
+            }))
+          : [];
+        return {
+          id: String(table?.id || `table-${tableIndex + 1}`).slice(0, 100),
+          pageId: String(table?.pageId),
+          x: clampFinite(table?.x, -500, 6000, 40),
+          y: clampFinite(table?.y, -500, 6000, 40),
+          width: clampFinite(table?.width, 20, 5000, 360),
+          height: clampFinite(table?.height, 20, 5000, 140),
+          columns,
+          rows,
+          borderColor: /^#[0-9a-f]{6}$/i.test(String(table?.borderColor)) ? String(table?.borderColor) : "#777777",
+          backgroundColor: /^#[0-9a-f]{6}$/i.test(String(table?.backgroundColor)) ? String(table?.backgroundColor) : "#ffffff"
+        };
+      })
+    : [];
+  return {
+    id,
+    email,
+    title: String(input.title || input.sourceFilename || "مستند PDF").trim().slice(0, 180) || "مستند PDF",
+    sourceFilename: String(input.sourceFilename || "document.pdf").trim().slice(0, 220) || "document.pdf",
+    createdAt: input.createdAt || now,
+    updatedAt: now,
+    pages,
+    fields,
+    tables
+  };
+}
+
+function pdfDocumentMetaFromDocument(document: PdfEditorDocument): StoredPdfEditorDocumentMeta {
+  return {
+    id: document.id,
+    email: document.email,
+    title: document.title,
+    sourceFilename: document.sourceFilename,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    document
+  };
+}
+
+async function listPdfDocumentData(email: string) {
+  if (supabase) {
+    await ensureSupabaseDataBucket();
+    const { data, error } = await supabase.storage.from(supabaseDataBucket).list(pdfDocumentStorageFolder(email), {
+      limit: 200,
+      sortBy: { column: "updated_at", order: "desc" }
+    });
+    if (error) {
+      if (isStorageNotFound(error)) return [];
+      throw new Error(error.message);
+    }
+    const documents = await Promise.all(
+      (data || [])
+        .filter((item) => item.name.endsWith(".json"))
+        .map((item) => downloadSupabaseJson<StoredPdfEditorDocumentMeta>(`${pdfDocumentStorageFolder(email)}/${item.name}`))
+    );
+    return documents
+      .filter((document): document is StoredPdfEditorDocumentMeta => Boolean(document))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  const rows = db
+    .prepare("SELECT id, email, title, source_filename, data, created_at, updated_at FROM pdf_documents WHERE email = ? ORDER BY updated_at DESC")
+    .all(email) as Array<{
+    id: string;
+    email: string;
+    title: string;
+    source_filename: string;
+    data: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    title: row.title,
+    sourceFilename: row.source_filename,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    document: JSON.parse(row.data) as PdfEditorDocument
+  }));
+}
+
+async function savePdfDocumentData(email: string, input: Partial<PdfEditorDocument>, forcedId?: string) {
+  const document = sanitizePdfEditorDocument(email, input, forcedId);
+  const meta = pdfDocumentMetaFromDocument(document);
+  if (supabase) {
+    await uploadSupabaseJson(pdfDocumentStoragePath(email, document.id), meta);
+    return meta;
+  }
+
+  db.prepare(
+    `INSERT INTO pdf_documents (id, email, title, source_filename, data, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       title = excluded.title,
+       source_filename = excluded.source_filename,
+       data = excluded.data,
+       updated_at = excluded.updated_at`
+  ).run(document.id, email, document.title, document.sourceFilename, JSON.stringify(document), document.createdAt, document.updatedAt);
+  return meta;
+}
+
+async function deletePdfDocumentData(email: string, documentId: string) {
+  const safeDocumentId = safeStorageKey(documentId);
+  if (!safeDocumentId) {
+    throw new Error("معرّف مستند PDF غير صحيح");
+  }
+  if (supabase) {
+    await ensureSupabaseDataBucket();
+    const { error } = await supabase.storage.from(supabaseDataBucket).remove([pdfDocumentStoragePath(email, safeDocumentId)]);
+    if (error && !isStorageNotFound(error)) {
+      throw new Error(error.message);
+    }
+    return { id: safeDocumentId };
+  }
+
+  db.prepare("DELETE FROM pdf_documents WHERE email = ? AND id = ?").run(email, safeDocumentId);
+  return { id: safeDocumentId };
 }
 
 const defaultBenefitColumns: BenefitColumn[] = [
@@ -985,6 +1298,12 @@ async function saveTemplateAsset(profileKey: string, filename: string, localFile
       });
     if (error) {
       throw new Error(`تعذر حفظ أصل القالب في Supabase: ${error.message}`);
+    }
+  } else {
+    const destination = path.join(assetDir, storagePath);
+    if (path.resolve(localFilePath) !== path.resolve(destination)) {
+      await fsp.mkdir(path.dirname(destination), { recursive: true });
+      await fsp.copyFile(localFilePath, destination);
     }
   }
   return assetUrl(storagePath);
@@ -2561,11 +2880,193 @@ summaryNumberOverrides اختياري، وإن كتبته فليكن متسقا�
   return sanitizeAiReport(JSON.parse(content), input);
 }
 
+function compactPdfDocumentForAi(document: PdfEditorDocument) {
+  return {
+    title: document.title,
+    pages: document.pages.map((page) => ({
+      id: page.id,
+      pageNumber: page.pageNumber,
+      width: Math.round(page.width),
+      height: Math.round(page.height)
+    })),
+    fields: document.fields.slice(0, 800).map((field) => ({
+      id: field.id,
+      pageId: field.pageId,
+      type: field.type,
+      text: field.text,
+      x: Math.round(field.x),
+      y: Math.round(field.y)
+    })),
+    tables: document.tables.slice(0, 80).map((table) => ({
+      id: table.id,
+      pageId: table.pageId,
+      columns: table.columns.map((column) => ({ id: column.id })),
+      rows: table.rows.slice(0, 160).map((row) => ({
+        id: row.id,
+        cells: row.cells.map((cell) => ({
+          id: cell.id,
+          columnId: cell.columnId,
+          text: cell.text
+        }))
+      }))
+    }))
+  };
+}
+
+function applyPdfDocumentPatch(document: PdfEditorDocument, patch: any): PdfEditorDocument {
+  const fieldUpdates = new Map<string, string>();
+  if (Array.isArray(patch?.fields)) {
+    for (const item of patch.fields) {
+      const id = String(item?.id || "");
+      if (id) fieldUpdates.set(id, String(item?.text ?? "").slice(0, 1200));
+    }
+  }
+  const cellUpdates = new Map<string, string>();
+  if (Array.isArray(patch?.tables)) {
+    for (const tablePatch of patch.tables) {
+      const cells = Array.isArray(tablePatch?.cells)
+        ? tablePatch.cells
+        : Array.isArray(tablePatch?.rows)
+          ? tablePatch.rows.flatMap((row: any) =>
+              Array.isArray(row?.cells)
+                ? row.cells.map((cell: any) => ({ ...cell, rowId: row.id || cell.rowId }))
+                : []
+            )
+          : [];
+      for (const cell of cells) {
+        const key = String(cell?.cellId || cell?.id || "");
+        if (key) {
+          cellUpdates.set(key, String(cell?.text ?? "").slice(0, 1500));
+          continue;
+        }
+        const rowId = String(cell?.rowId || "");
+        const columnId = String(cell?.columnId || "");
+        if (rowId && columnId) {
+          cellUpdates.set(`${rowId}:${columnId}`, String(cell?.text ?? "").slice(0, 1500));
+        }
+      }
+    }
+  }
+
+  return {
+    ...document,
+    title: String(patch?.title || document.title).slice(0, 180),
+    updatedAt: nowIso(),
+    fields: document.fields.map((field) =>
+      fieldUpdates.has(field.id)
+        ? {
+            ...field,
+            originalText: field.originalText === undefined ? field.text : field.originalText,
+            text: fieldUpdates.get(field.id) || ""
+          }
+        : field
+    ),
+    tables: document.tables.map((table) => ({
+      ...table,
+      rows: table.rows.map((row) => ({
+        ...row,
+        cells: row.cells.map((cell) => {
+          const value = cellUpdates.get(cell.id) ?? cellUpdates.get(`${row.id}:${cell.columnId}`);
+          return value !== undefined
+            ? {
+                ...cell,
+                originalText: cell.originalText === undefined ? cell.text : cell.originalText,
+                text: value
+              }
+            : cell;
+        })
+      }))
+    }))
+  };
+}
+
+async function generatePdfDocumentWithDeepSeek(input: {
+  document: PdfEditorDocument;
+  activityTitle: string;
+  notes?: string;
+}) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    throw new Error("لم يتم ضبط مفتاح الذكاء الاصطناعي على الخادم");
+  }
+
+  const model = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+  const system = `
+أنت وكيل تحرير مستندات PDF عربية داخل محرر بصري.
+أخرج JSON صالح فقط ولا تضف شرحاً.
+المستند يحتوي حقول نصية وجداول مستخرجة من PDF. لا تغير الإحداثيات ولا تضف أو تحذف صفحات أو حقول أو جداول.
+مهمتك تعبئة النصوص والخلايا الموجودة بما يناسب عنوان النشاط والملاحظات، مع الحفاظ على معنى العناوين والأسماء والأرقام الظاهرة.
+إذا كان الحقل يحتوي عنواناً أو اسم جهة أو اسم شخص فلا تستبدله إلا إذا كان واضحاً من عنوان النشاط أن النص قديم وغير مناسب.
+استخدم العربية الرسمية المختصرة، واجعل النصوص مناسبة لمساحات الخلايا.
+أعد فقط المفاتيح التي تريد تغييرها.
+صيغة JSON:
+{
+  "title": "عنوان المستند",
+  "fields": [{ "id": "field-id", "text": "النص الجديد" }],
+  "tables": [
+    {
+      "id": "table-id",
+      "cells": [{ "cellId": "cell-id", "text": "النص الجديد" }]
+    }
+  ]
+}`.trim();
+  const user = {
+    activityTitle: input.activityTitle,
+    notes: input.notes || "",
+    document: compactPdfDocumentForAi(input.document)
+  };
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: `json\n${JSON.stringify(user)}` }
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.35,
+    max_tokens: 8000
+  };
+  if (model.startsWith("deepseek-v4")) {
+    body.thinking = { type: "disabled" };
+  }
+
+  const timeoutMs = envNumber("DEEPSEEK_TIMEOUT_MS", 55000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("استغرق الذكاء الاصطناعي وقتاً أطول من المتوقع.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+  const payload: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "فشل اتصال الذكاء الاصطناعي");
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("استجابة الذكاء الاصطناعي فارغة");
+  }
+  return JSON.parse(content);
+}
+
 const upload = multer({ dest: uploadDir });
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "4mb" }));
+app.use(express.json({ limit: "12mb" }));
 app.get(/^\/assets\/templates\/(.+)$/, async (req, res, next) => {
   if (!supabase) {
     next();
@@ -2727,6 +3228,90 @@ app.post("/api/import-pdf", upload.single("pdf"), async (req, res) => {
     if (req.file?.path) {
       fs.promises.unlink(req.file.path).catch(() => undefined);
     }
+  }
+});
+
+app.post("/api/pdf-documents/assets", upload.single("asset"), async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
+    if (!req.file) {
+      res.status(400).json({ error: "لم يتم رفع صورة الصفحة" });
+      return;
+    }
+    const documentId = safeStorageKey(String(req.body.documentId || randomUUID()));
+    const pageId = safeStorageKey(String(req.body.pageId || "page"));
+    const profileKey = `${email.replace(/[^a-z0-9_-]/gi, "_")}/pdf-documents/${documentId}`;
+    const extension = path.extname(req.file.originalname || "") || ".jpg";
+    const filename = `${pageId}-${randomUUID()}${extension}`;
+    const url = await saveTemplateAsset(profileKey, filename, req.file.path);
+    res.json({ url });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "تعذر حفظ صورة الصفحة" });
+  } finally {
+    if (req.file?.path) {
+      fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
+  }
+});
+
+app.post("/api/pdf-documents/import", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
+    res.json(await savePdfDocumentData(email, req.body.document));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ مستند PDF" });
+  }
+});
+
+app.get("/api/pdf-documents", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.query.email);
+    await requireSubscriptionAccess(req, email);
+    res.json(await listPdfDocumentData(email));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تحميل مستندات PDF" });
+  }
+});
+
+app.put("/api/pdf-documents/:id", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
+    res.json(await savePdfDocumentData(email, req.body.document, req.params.id));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ مستند PDF" });
+  }
+});
+
+app.delete("/api/pdf-documents/:id", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email || req.query.email);
+    await requireSubscriptionAccess(req, email);
+    res.json(await deletePdfDocumentData(email, req.params.id));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حذف مستند PDF" });
+  }
+});
+
+app.post("/api/pdf-documents/:id/generate", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    await requireSubscriptionAccess(req, email);
+    const document = sanitizePdfEditorDocument(email, req.body.document, req.params.id);
+    const patch = await generatePdfDocumentWithDeepSeek({
+      document,
+      activityTitle: String(req.body.activityTitle || document.title || "المستند"),
+      notes: String(req.body.notes || "")
+    });
+    const generatedDocument = applyPdfDocumentPatch(document, patch);
+    const saved = await savePdfDocumentData(email, generatedDocument, req.params.id);
+    res.json({ document: saved.document, patch });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "تعذر توليد مستند PDF";
+    const timedOut = message.includes("أطول من المتوقع");
+    res.status(timedOut ? 504 : 502).json({ error: message });
   }
 });
 

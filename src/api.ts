@@ -1,9 +1,11 @@
 import type {
   GenerationOptions,
   ImpactLevel,
+  PdfEditorDocument,
   Profile,
   Report,
   SmartTemplate,
+  StoredPdfEditorDocumentMeta,
   StoredReportMeta,
   SubscriptionLoginResult,
   Teacher
@@ -113,4 +115,72 @@ export async function listReports(email: string, subscriptionCode: string): Prom
     headers: subscriptionHeaders(subscriptionCode)
   });
   return parseResponse<StoredReportMeta[]>(response);
+}
+
+export async function uploadPdfDocumentAsset(input: {
+  email: string;
+  documentId: string;
+  pageId: string;
+  file: Blob;
+  filename: string;
+}, subscriptionCode: string) {
+  const form = new FormData();
+  form.set("email", input.email);
+  form.set("documentId", input.documentId);
+  form.set("pageId", input.pageId);
+  form.set("asset", input.file, input.filename);
+  const response = await fetch("/api/pdf-documents/assets", {
+    method: "POST",
+    headers: subscriptionHeaders(subscriptionCode),
+    body: form
+  });
+  return parseResponse<{ url: string }>(response);
+}
+
+export async function importPdfDocument(document: PdfEditorDocument, subscriptionCode: string): Promise<StoredPdfEditorDocumentMeta> {
+  const response = await fetch("/api/pdf-documents/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...subscriptionHeaders(subscriptionCode) },
+    body: JSON.stringify({ email: document.email, document })
+  });
+  return parseResponse<StoredPdfEditorDocumentMeta>(response);
+}
+
+export async function savePdfDocument(document: PdfEditorDocument, subscriptionCode: string): Promise<StoredPdfEditorDocumentMeta> {
+  const response = await fetch(`/api/pdf-documents/${encodeURIComponent(document.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...subscriptionHeaders(subscriptionCode) },
+    body: JSON.stringify({ email: document.email, document })
+  });
+  return parseResponse<StoredPdfEditorDocumentMeta>(response);
+}
+
+export async function listPdfDocuments(email: string, subscriptionCode: string): Promise<StoredPdfEditorDocumentMeta[]> {
+  const response = await fetch(`/api/pdf-documents?email=${encodeURIComponent(email)}`, {
+    headers: subscriptionHeaders(subscriptionCode)
+  });
+  return parseResponse<StoredPdfEditorDocumentMeta[]>(response);
+}
+
+export async function deletePdfDocument(documentId: string, accountId: string, subscriptionCode: string): Promise<{ id: string }> {
+  const response = await fetch(`/api/pdf-documents/${encodeURIComponent(documentId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", ...subscriptionHeaders(subscriptionCode) },
+    body: JSON.stringify({ email: accountId })
+  });
+  return parseResponse<{ id: string }>(response);
+}
+
+export async function generatePdfDocument(input: {
+  email: string;
+  document: PdfEditorDocument;
+  activityTitle: string;
+  notes?: string;
+}, subscriptionCode: string): Promise<{ document: PdfEditorDocument; patch: unknown }> {
+  const response = await fetch(`/api/pdf-documents/${encodeURIComponent(input.document.id)}/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...subscriptionHeaders(subscriptionCode) },
+    body: JSON.stringify(input)
+  });
+  return parseResponse<{ document: PdfEditorDocument; patch: unknown }>(response);
 }

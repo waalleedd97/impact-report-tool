@@ -220,3 +220,91 @@ export type StoredReportMeta = {
   updatedAt: string;
   report: Report;
 };
+
+export type PdfEditorTextAlign = "right" | "center" | "left";
+
+export type PdfEditorField = {
+  id: string;
+  pageId: string;
+  type: "text" | "checkmark";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  originalText?: string;
+  fontSize: number;
+  fontFamily: string;
+  fontWeight: number;
+  color: string;
+  textAlign: PdfEditorTextAlign;
+  direction: "rtl" | "ltr" | "auto";
+};
+
+export type PdfEditorTableColumn = {
+  id: string;
+  width: number;
+};
+
+export type PdfEditorTableCell = {
+  id: string;
+  columnId: string;
+  text: string;
+  originalText?: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  textAlign: PdfEditorTextAlign;
+};
+
+export type PdfEditorTableRow = {
+  id: string;
+  height: number;
+  cells: PdfEditorTableCell[];
+};
+
+export type PdfEditorTable = {
+  id: string;
+  pageId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  columns: PdfEditorTableColumn[];
+  rows: PdfEditorTableRow[];
+  borderColor: string;
+  backgroundColor: string;
+};
+
+export type PdfEditorPage = {
+  id: string;
+  pageNumber: number;
+  width: number;
+  height: number;
+  widthMm: number;
+  heightMm: number;
+  backgroundUrl: string;
+  textLayerExtracted: boolean;
+};
+
+export type PdfEditorDocument = {
+  id: string;
+  email: string;
+  title: string;
+  sourceFilename: string;
+  createdAt: string;
+  updatedAt: string;
+  pages: PdfEditorPage[];
+  fields: PdfEditorField[];
+  tables: PdfEditorTable[];
+};
+
+export type StoredPdfEditorDocumentMeta = {
+  id: string;
+  email: string;
+  title: string;
+  sourceFilename: string;
+  createdAt: string;
+  updatedAt: string;
+  document: PdfEditorDocument;
+};

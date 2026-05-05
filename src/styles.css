@@ -214,7 +214,7 @@ button:disabled {
 .tabs,
 .segmented {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 4px;
   background: #eef3f6;
@@ -1523,4 +1523,317 @@ button:disabled {
 .pdf-export-mode .number-toolbar,
 .pdf-export-mode .smart-region-handle {
   display: none !important;
+}
+
+.pdf-control-section {
+  gap: 14px;
+}
+
+.pdf-document-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pdf-document-list > span {
+  font-size: 13px;
+  font-weight: 800;
+  color: #344353;
+}
+
+.saved-report-button.active {
+  border-color: #238b8f;
+  background: #edfafa;
+}
+
+.pdf-editor-empty {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  color: #708092;
+  font-weight: 800;
+}
+
+.pdf-editor-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #dfe7ee;
+}
+
+.pdf-editor-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  background: #ffffff;
+  border-bottom: 1px solid #cfd9e4;
+}
+
+.pdf-editor-toolbar button,
+.pdf-editor-inspector button {
+  min-height: 34px;
+  border: 1px solid #1f7f83;
+  border-radius: 6px;
+  background: #238b8f;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-weight: 800;
+}
+
+.pdf-editor-toolbar .danger-button {
+  border-color: #b42318;
+  background: #c83d32;
+}
+
+.pdf-editor-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 230px;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.pdf-page-rail,
+.pdf-editor-inspector {
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #cfd9e4;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.pdf-page-rail {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.pdf-page-rail button {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #eef3f6;
+  padding: 5px;
+  display: grid;
+  gap: 4px;
+  color: #334155;
+  font-weight: 800;
+}
+
+.pdf-page-rail button.active {
+  border-color: #238b8f;
+  background: #e8f7f7;
+}
+
+.pdf-page-rail img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: #fff;
+}
+
+.pdf-page-stack {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  padding: 8px 0 80px;
+}
+
+.pdf-editor-page-surface {
+  position: relative;
+  flex: 0 0 auto;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(27, 42, 58, 0.22);
+  transform-origin: top center;
+}
+
+.pdf-editor-page-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
+.pdf-edit-field {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  align-items: center;
+  padding: 2px 5px;
+  line-height: 1.25;
+  border: 1px dashed transparent;
+  background: rgba(255, 255, 255, 0.9);
+  overflow-wrap: anywhere;
+}
+
+.pdf-edit-field.unchanged:not(.selected):not(:hover) {
+  background: transparent;
+}
+
+.pdf-edit-field.unchanged:not(.selected):not(:hover) span {
+  color: transparent !important;
+}
+
+.pdf-edit-field span {
+  outline: none;
+  min-width: 1ch;
+  direction: rtl;
+  unicode-bidi: plaintext;
+}
+
+.pdf-edit-field:hover,
+.pdf-edit-field.selected {
+  border-color: #238b8f;
+  background: rgba(236, 250, 250, 0.72);
+}
+
+.pdf-edit-field.checkmark {
+  place-items: center;
+  padding: 0;
+  background: transparent;
+}
+
+.pdf-field-drag-handle,
+.pdf-table-drag-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  min-height: 12px;
+  border: 1px solid #238b8f;
+  border-radius: 50%;
+  background: #fff;
+  padding: 0;
+  opacity: 0;
+  cursor: move;
+}
+
+.pdf-field-drag-handle {
+  top: -7px;
+  left: -7px;
+}
+
+.pdf-table-drag-handle {
+  top: -8px;
+  right: -8px;
+}
+
+.pdf-edit-field:hover .pdf-field-drag-handle,
+.pdf-edit-field.selected .pdf-field-drag-handle,
+.pdf-edit-table:hover .pdf-table-drag-handle,
+.pdf-edit-table.selected .pdf-table-drag-handle {
+  opacity: 1;
+}
+
+.pdf-edit-table {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid #777;
+  background: #fff;
+}
+
+.pdf-edit-table.unchanged:not(.selected):not(:hover) {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.pdf-edit-table.unchanged:not(.selected):not(:hover) td {
+  border-color: transparent !important;
+  color: transparent !important;
+  background: transparent !important;
+}
+
+.pdf-edit-table.selected {
+  outline: 2px solid #238b8f;
+  outline-offset: 2px;
+}
+
+.pdf-edit-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.pdf-edit-table td {
+  border: 1px solid #777;
+  padding: 3px 5px;
+  vertical-align: middle;
+  line-height: 1.35;
+  outline: none;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pdf-edit-table td.selected {
+  background: rgba(35, 139, 143, 0.14);
+  box-shadow: inset 0 0 0 2px #238b8f;
+}
+
+.pdf-editor-inspector {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.pdf-editor-inspector h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #18324a;
+}
+
+.pdf-editor-inspector label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #344353;
+}
+
+.pdf-export-mode .pdf-editor-toolbar,
+.pdf-export-mode .pdf-page-rail,
+.pdf-export-mode .pdf-editor-inspector,
+.pdf-export-mode .pdf-field-drag-handle,
+.pdf-export-mode .pdf-table-drag-handle {
+  display: none !important;
+}
+
+.pdf-export-mode .pdf-edit-field,
+.pdf-export-mode .pdf-edit-field.selected,
+.pdf-export-mode .pdf-edit-field:hover,
+.pdf-export-mode .pdf-edit-table,
+.pdf-export-mode .pdf-edit-table.selected {
+  border-color: transparent !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+
+.pdf-export-mode .pdf-edit-field.unchanged,
+.pdf-export-mode .pdf-edit-table.unchanged {
+  opacity: 0 !important;
+}
+
+@media (max-width: 1100px) {
+  .pdf-editor-layout {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .pdf-editor-inspector {
+    grid-column: 1 / -1;
+    max-height: 260px;
+  }
 }
