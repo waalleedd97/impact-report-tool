@@ -14,6 +14,7 @@ import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import { useEffect, useMemo, useState } from "react";
 import {
+  deleteReport,
   generateReport,
   importPdf,
   listReports,
@@ -34,6 +35,7 @@ import type {
   Report,
   SmartTemplate,
   StoredReportMeta,
+  TemplateAssets,
   SubscriptionLoginResult,
   SubscriptionSession,
   Teacher
@@ -172,6 +174,27 @@ function normalizeReport(
     percentageOverrides: { ...report.percentageOverrides },
     summaryNumberOverrides: { ...report.summaryNumberOverrides }
   };
+}
+
+function withoutSignatureAsset(assets: TemplateAssets): TemplateAssets {
+  const { signatureUrl: _signatureUrl, ...rest } = assets;
+  return rest;
+}
+
+function withoutTemplateSignature(template: SmartTemplate): SmartTemplate {
+  return {
+    ...template,
+    assets: withoutSignatureAsset(template.assets)
+  };
+}
+
+function hasSignatureAsset(profile: Profile) {
+  return Boolean(
+    profile.templateAssets.signatureUrl ||
+      profile.currentReport?.templateAssets.signatureUrl ||
+      profile.currentReport?.smartTemplate?.assets.signatureUrl ||
+      profile.smartTemplates.some((template) => template.assets.signatureUrl)
+  );
 }
 
 function normalizeProfile(email: string, loadedProfile: Partial<Profile>): Profile {
@@ -431,6 +454,64 @@ export default function App() {
       setMessage("تم حفظ التقرير");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر حفظ التقرير");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeleteSavedReport(item: StoredReportMeta) {
+    if (!profile) return;
+    const confirmed = window.confirm(`حذف "${item.title}" من المحفوظات؟`);
+    if (!confirmed) return;
+
+    setBusy("حذف التقرير");
+    setMessage("");
+    try {
+      await deleteReport(item.id, profile.email, subscription?.code || "");
+      setReports((items) => {
+        const nextReports = items.filter((report) => report.id !== item.id);
+        writeJsonBackup(reportsBackupKey(profile.email), nextReports);
+        return nextReports;
+      });
+      setMessage("تم حذف التقرير من المحفوظات");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر حذف التقرير");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleRemoveSignature() {
+    if (!profile) return;
+    setBusy("حذف التوقيع");
+    setMessage("");
+    try {
+      const smartTemplates = profile.smartTemplates.map(withoutTemplateSignature);
+      const activeTemplate =
+        smartTemplates.find((template) => template.id === profile.activeSmartTemplateId) || smartTemplates[0];
+      const currentReport = profile.currentReport
+        ? normalizeReport(
+            {
+              ...profile.currentReport,
+              templateAssets: withoutSignatureAsset(profile.currentReport.templateAssets),
+              smartTemplate: profile.currentReport.smartTemplate
+                ? withoutTemplateSignature(profile.currentReport.smartTemplate)
+                : activeTemplate,
+              updatedAt: new Date().toISOString()
+            },
+            profile.printSettings,
+            activeTemplate
+          )
+        : undefined;
+      await persistProfile({
+        ...profile,
+        templateAssets: withoutSignatureAsset(profile.templateAssets),
+        smartTemplates,
+        currentReport
+      });
+      setMessage("تم حذف التوقيع");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر حذف التوقيع");
     } finally {
       setBusy("");
     }
@@ -792,7 +873,7 @@ export default function App() {
               </button>
               <button onClick={exportA4Pdf} disabled={!currentReport}>
                 <FileText size={17} />
-                PDF A4
+                استخراج بصيغة PDF
               </button>
             </div>
             <label className="file-picker">
@@ -818,6 +899,8 @@ export default function App() {
             onChange={updateProfile}
             onReportChange={updateReport}
             onSmartTemplateChange={applySmartTemplate}
+            hasSignature={hasSignatureAsset(profile)}
+            onRemoveSignature={handleRemoveSignature}
           />
         ) : null}
 
@@ -825,23 +908,34 @@ export default function App() {
           <section className="panel-section saved-list">
             {reports.length ? (
               reports.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    const nextReport = normalizeReport(item.report, profile.printSettings, activeSmartTemplate(profile));
-                    setProfile({
-                      ...profile,
-                      printSettings: nextReport.printSettings,
-                      currentReport: nextReport
-                    });
-                    setCourseTitle(nextReport.courseTitle);
-                    setLevel(nextReport.level);
-                  }}
-                >
-                  <FileText size={16} />
-                  <span>{item.title}</span>
-                  <small>{new Date(item.updatedAt).toLocaleDateString("ar-SA")}</small>
-                </button>
+                <div className="saved-item" key={item.id}>
+                  <button
+                    className="saved-report-button"
+                    onClick={() => {
+                      const nextReport = normalizeReport(item.report, profile.printSettings, activeSmartTemplate(profile));
+                      setProfile({
+                        ...profile,
+                        printSettings: nextReport.printSettings,
+                        currentReport: nextReport
+                      });
+                      setCourseTitle(nextReport.courseTitle);
+                      setLevel(nextReport.level);
+                    }}
+                  >
+                    <FileText size={16} />
+                    <span>{item.title}</span>
+                    <small>{new Date(item.updatedAt).toLocaleDateString("ar-SA")}</small>
+                  </button>
+                  <button
+                    className="saved-delete-button"
+                    onClick={() => void handleDeleteSavedReport(item)}
+                    title="حذف من المحفوظات"
+                    aria-label={`حذف ${item.title} من المحفوظات`}
+                    disabled={Boolean(busy)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               ))
             ) : (
               <p className="muted">لا توجد تقارير محفوظة</p>
@@ -950,12 +1044,16 @@ function SettingsEditor({
   profile,
   onChange,
   onReportChange,
-  onSmartTemplateChange
+  onSmartTemplateChange,
+  hasSignature,
+  onRemoveSignature
 }: {
   profile: Profile;
   onChange: (patch: Partial<Profile>) => Promise<void>;
   onReportChange: (report: Report) => Promise<void>;
   onSmartTemplateChange: (template: SmartTemplate) => void;
+  hasSignature: boolean;
+  onRemoveSignature: () => Promise<void>;
 }) {
   const settings = profile.schoolSettings;
   const report = profile.currentReport;
@@ -1020,6 +1118,16 @@ function SettingsEditor({
           اضغط على بيانات الوزارة أو اسم المديرة أو التوقيع داخل المعاينة، ثم اسحب العنصر لتحريكه.
           اسحب زوايا اسم المديرة أو التوقيع لتغيير حجمهما. ولتعديل الخط، اضغط على أي نص داخل المعاينة.
         </p>
+        <div className="signature-action-row">
+          <div>
+            <strong>التوقيع</strong>
+            <small>يحذف صورة التوقيع فقط من التقرير والقالب الحالي.</small>
+          </div>
+          <button type="button" onClick={() => void onRemoveSignature()} disabled={!hasSignature}>
+            <Trash2 size={16} />
+            حذف التوقيع
+          </button>
+        </div>
       </div>
       <div className="settings-group">
         <h2>القالب الذكي</h2>

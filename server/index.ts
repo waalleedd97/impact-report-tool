@@ -398,6 +398,16 @@ async function saveReportToSupabaseStorage(email: string, meta: StoredReportMeta
   return meta;
 }
 
+async function deleteReportFromSupabaseStorage(email: string, reportId: string) {
+  if (!supabase) return { id: reportId };
+  await ensureSupabaseDataBucket();
+  const { error } = await supabase.storage.from(supabaseDataBucket).remove([reportStoragePath(email, reportId)]);
+  if (error && !isStorageNotFound(error)) {
+    throw new Error(error.message);
+  }
+  return { id: reportId };
+}
+
 async function loadSubscriptionData(code: string) {
   if (supabase) {
     return downloadSupabaseJson<SubscriptionRecord>(subscriptionStoragePath(code));
@@ -583,6 +593,31 @@ async function upsertReportData(email: string, report: Report) {
        updated_at = excluded.updated_at`
   ).run(meta.id, email, meta.title, meta.level, JSON.stringify(meta.report), meta.createdAt, meta.updatedAt);
   return meta;
+}
+
+async function deleteReportData(email: string, reportId: string) {
+  const safeReportId = String(reportId || "").trim();
+  if (!safeReportId) {
+    throw new Error("معرّف التقرير غير صحيح");
+  }
+
+  if (supabase) {
+    if (supabaseDataMode === "storage-json") {
+      return deleteReportFromSupabaseStorage(email, safeReportId);
+    }
+    const { error } = await supabase.from("reports").delete().eq("email", email).eq("id", safeReportId);
+    if (error) {
+      if (isMissingSupabaseTable(error)) {
+        supabaseDataMode = "storage-json";
+        return deleteReportFromSupabaseStorage(email, safeReportId);
+      }
+      throw new Error(error.message);
+    }
+    return { id: safeReportId };
+  }
+
+  db.prepare("DELETE FROM reports WHERE email = ? AND id = ?").run(email, safeReportId);
+  return { id: safeReportId };
 }
 
 const defaultBenefitColumns: BenefitColumn[] = [
@@ -1972,6 +2007,16 @@ app.put("/api/reports/:id", async (req, res) => {
     res.json(await upsertReportData(email, { ...(req.body.report as Report), id: req.params.id }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حفظ التقرير" });
+  }
+});
+
+app.delete("/api/reports/:id", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email || req.query.email);
+    await requireSubscriptionAccess(req, email);
+    res.json(await deleteReportData(email, req.params.id));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "تعذر حذف التقرير" });
   }
 });
 

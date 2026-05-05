@@ -99,6 +99,15 @@ export async function saveReport(report: Report, subscriptionCode: string): Prom
   return parseResponse<StoredReportMeta>(response);
 }
 
+export async function deleteReport(reportId: string, accountId: string, subscriptionCode: string): Promise<{ id: string }> {
+  const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", ...subscriptionHeaders(subscriptionCode) },
+    body: JSON.stringify({ email: accountId })
+  });
+  return parseResponse<{ id: string }>(response);
+}
+
 export async function listReports(email: string, subscriptionCode: string): Promise<StoredReportMeta[]> {
   const response = await fetch(`/api/reports?email=${encodeURIComponent(email)}`, {
     headers: subscriptionHeaders(subscriptionCode)

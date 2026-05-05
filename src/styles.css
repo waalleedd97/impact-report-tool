@@ -417,7 +417,14 @@ button:disabled {
   font-size: 13px;
 }
 
-.saved-list button {
+.saved-item {
+  display: grid;
+  grid-template-columns: 1fr 40px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.saved-report-button {
   display: grid;
   grid-template-columns: 18px 1fr auto;
   gap: 8px;
@@ -426,6 +433,21 @@ button:disabled {
   color: #21303f;
   border-color: #d6dee7;
   background: #fff;
+}
+
+.saved-delete-button {
+  display: grid;
+  place-items: center;
+  min-height: 42px;
+  padding: 0;
+  color: #b42318;
+  border-color: #f0c5bf;
+  background: #fff7f6;
+}
+
+.saved-delete-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .saved-list small {
@@ -445,6 +467,46 @@ button:disabled {
   margin: 0;
   color: #1d3446;
   font-size: 15px;
+}
+
+.signature-action-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #d8e2eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.signature-action-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.signature-action-row strong {
+  color: #203447;
+  font-size: 14px;
+}
+
+.signature-action-row small {
+  color: #667789;
+  font-size: 12px;
+}
+
+.signature-action-row button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #b42318;
+  border-color: #f0c5bf;
+  background: #fff7f6;
+}
+
+.signature-action-row button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .range-field span {
