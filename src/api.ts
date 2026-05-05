@@ -50,7 +50,7 @@ export async function generateReport(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  return parseResponse<{ report: Report; source: "deepseek" | "local-fallback"; warning?: string }>(response);
+  return parseResponse<{ report: Report; source: "deepseek" }>(response);
 }
 
 export async function saveReport(report: Report): Promise<StoredReportMeta> {

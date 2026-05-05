@@ -291,7 +291,7 @@ export default function App() {
       setMessage("أضف أسماء المعلمات أولاً");
       return;
     }
-    setBusy("توليد التقرير");
+    setBusy("DeepSeek يعبئ التقرير بالكامل، قد يستغرق حتى دقيقة");
     setMessage("");
     try {
       const result = await generateReport({
@@ -306,11 +306,7 @@ export default function App() {
         currentReport: normalizeReport(result.report, profile.printSettings, activeSmartTemplate(profile))
       };
       await persistProfile(nextProfile);
-      setMessage(
-        result.source === "deepseek"
-          ? "تم توليد التقرير عبر DeepSeek"
-          : result.warning || "تم توليد تقرير محلي مؤقت"
-      );
+      setMessage("تم توليد التقرير عبر DeepSeek");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر توليد التقرير");
     } finally {
