@@ -859,7 +859,8 @@ async function renewSubscriptionRecord(expiredCodeInput: unknown, newCodeInput: 
 }
 
 async function requireSubscriptionAccess(req: express.Request, accountId: string) {
-  const code = normalizeSubscriptionCode(req.header("x-subscription-code"));
+  const headerValue = req.headers["x-subscription-code"];
+  const code = normalizeSubscriptionCode(Array.isArray(headerValue) ? headerValue[0] : headerValue);
   const subscription = await activateOrLoadSubscription(code);
   if (subscription.accountId !== accountId) {
     throw new Error("رقم الاشتراك لا يطابق هذا الحساب");
