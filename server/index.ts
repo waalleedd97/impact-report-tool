@@ -5,7 +5,6 @@ import express from "express";
 import multer from "multer";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream } from "pdf-lib";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { PNG } from "pngjs";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -1075,9 +1074,173 @@ function extractImportedSchoolSettings(text: string): Partial<SchoolSettings> {
   return settings;
 }
 
+class PdfImportDOMMatrix {
+  a = 1;
+  b = 0;
+  c = 0;
+  d = 1;
+  e = 0;
+  f = 0;
+  is2D = true;
+  isIdentity = true;
+
+  constructor(init?: number[] | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+    if (Array.isArray(init)) {
+      if (init.length >= 6) {
+        [this.a, this.b, this.c, this.d, this.e, this.f] = init;
+      }
+      if (init.length >= 16) {
+        this.a = init[0];
+        this.b = init[1];
+        this.c = init[4];
+        this.d = init[5];
+        this.e = init[12];
+        this.f = init[13];
+      }
+    } else if (init) {
+      this.a = init.a ?? this.a;
+      this.b = init.b ?? this.b;
+      this.c = init.c ?? this.c;
+      this.d = init.d ?? this.d;
+      this.e = init.e ?? this.e;
+      this.f = init.f ?? this.f;
+    }
+    this.updateIdentity();
+  }
+
+  private updateIdentity() {
+    this.isIdentity = this.a === 1 && this.b === 0 && this.c === 0 && this.d === 1 && this.e === 0 && this.f === 0;
+  }
+
+  private matrixFrom(other?: PdfImportDOMMatrix | number[] | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+    return other instanceof PdfImportDOMMatrix ? other : new PdfImportDOMMatrix(other);
+  }
+
+  multiplySelf(other?: PdfImportDOMMatrix | number[] | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+    const matrix = this.matrixFrom(other);
+    const a = this.a * matrix.a + this.c * matrix.b;
+    const b = this.b * matrix.a + this.d * matrix.b;
+    const c = this.a * matrix.c + this.c * matrix.d;
+    const d = this.b * matrix.c + this.d * matrix.d;
+    const e = this.a * matrix.e + this.c * matrix.f + this.e;
+    const f = this.b * matrix.e + this.d * matrix.f + this.f;
+    Object.assign(this, { a, b, c, d, e, f });
+    this.updateIdentity();
+    return this;
+  }
+
+  preMultiplySelf(other?: PdfImportDOMMatrix | number[] | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+    const matrix = this.matrixFrom(other);
+    const next = new PdfImportDOMMatrix(matrix).multiplySelf(this);
+    Object.assign(this, next);
+    this.updateIdentity();
+    return this;
+  }
+
+  translateSelf(x = 0, y = 0) {
+    return this.multiplySelf({ e: x, f: y });
+  }
+
+  scaleSelf(scaleX = 1, scaleY = scaleX) {
+    return this.multiplySelf({ a: scaleX, d: scaleY });
+  }
+
+  invertSelf() {
+    const determinant = this.a * this.d - this.b * this.c;
+    if (!determinant) {
+      return this;
+    }
+    const a = this.d / determinant;
+    const b = -this.b / determinant;
+    const c = -this.c / determinant;
+    const d = this.a / determinant;
+    const e = (this.c * this.f - this.d * this.e) / determinant;
+    const f = (this.b * this.e - this.a * this.f) / determinant;
+    Object.assign(this, { a, b, c, d, e, f });
+    this.updateIdentity();
+    return this;
+  }
+
+  multiply(other?: PdfImportDOMMatrix | number[] | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+    return new PdfImportDOMMatrix(this).multiplySelf(other);
+  }
+
+  translate(x = 0, y = 0) {
+    return new PdfImportDOMMatrix(this).translateSelf(x, y);
+  }
+
+  scale(scaleX = 1, scaleY = scaleX) {
+    return new PdfImportDOMMatrix(this).scaleSelf(scaleX, scaleY);
+  }
+
+  transformPoint(point: { x?: number; y?: number; z?: number; w?: number }) {
+    const x = point.x || 0;
+    const y = point.y || 0;
+    return {
+      x: this.a * x + this.c * y + this.e,
+      y: this.b * x + this.d * y + this.f,
+      z: point.z || 0,
+      w: point.w || 1
+    };
+  }
+
+  toFloat32Array() {
+    return Float32Array.from([this.a, this.b, 0, 0, this.c, this.d, 0, 0, 0, 0, 1, 0, this.e, this.f, 0, 1]);
+  }
+
+  toFloat64Array() {
+    return Float64Array.from(this.toFloat32Array());
+  }
+}
+
+class PdfImportImageData {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+  colorSpace = "srgb";
+
+  constructor(dataOrWidth: Uint8ClampedArray | number, width?: number, height?: number) {
+    if (typeof dataOrWidth === "number") {
+      this.width = dataOrWidth;
+      this.height = Number(width) || 0;
+      this.data = new Uint8ClampedArray(this.width * this.height * 4);
+    } else {
+      this.data = dataOrWidth;
+      this.width = Number(width) || 0;
+      this.height = Number(height) || (this.width ? this.data.length / (this.width * 4) : 0);
+    }
+  }
+}
+
+class PdfImportPath2D {
+  addPath() {}
+  moveTo() {}
+  lineTo() {}
+  bezierCurveTo() {}
+  quadraticCurveTo() {}
+  rect() {}
+  closePath() {}
+}
+
+let pdfJsImportPromise: Promise<any> | undefined;
+
+function ensurePdfJsDomPolyfills() {
+  const global = globalThis as any;
+  global.DOMMatrix ||= PdfImportDOMMatrix;
+  global.ImageData ||= PdfImportImageData;
+  global.Path2D ||= PdfImportPath2D;
+}
+
+async function loadPdfJs() {
+  ensurePdfJsDomPolyfills();
+  pdfJsImportPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs");
+  return pdfJsImportPromise;
+}
+
 async function extractPdfPageTexts(pdfPath: string) {
   const data = await fsp.readFile(pdfPath);
-  const loadingTask = (pdfjsLib as any).getDocument({
+  const pdfjsLib = await loadPdfJs();
+  const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(data),
     disableWorker: true,
     useSystemFonts: true
