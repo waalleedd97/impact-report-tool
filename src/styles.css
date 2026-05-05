@@ -640,6 +640,33 @@ button:disabled {
   color: var(--report-accent-color, #ff0000);
 }
 
+.summary-table .summary-benefits-label {
+  padding: 0 1.5mm;
+  vertical-align: middle;
+  text-align: center;
+  line-height: 1.15;
+}
+
+.summary-table .summary-benefits-head-row th {
+  height: 10.5mm;
+  padding-top: 0.7mm;
+  padding-bottom: 0.7mm;
+  vertical-align: middle;
+}
+
+.summary-table .summary-benefits-percent-row td {
+  height: 7.6mm;
+  padding-top: 0.6mm;
+  padding-bottom: 0.6mm;
+  vertical-align: middle;
+  font-size: calc(var(--report-font-size, 12pt) * 1.08);
+  line-height: 1;
+}
+
+.summary-table .summary-benefits-spacer {
+  background: rgba(255, 255, 255, 0.86);
+}
+
 .narrative-section {
   position: absolute;
   z-index: 1;

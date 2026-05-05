@@ -303,7 +303,7 @@ export default function App() {
       setMessage("أضف أسماء المعلمات أولاً");
       return;
     }
-    setBusy("DeepSeek يعبئ التقرير بالكامل، قد يستغرق حتى دقيقة");
+    setBusy("يقوم الذكاء الاصطناعي بتعبئة التقرير بالكامل، قد يستغرق حتى دقيقة");
     setMessage("");
     try {
       const generationOptions: GenerationOptions = {};
@@ -331,7 +331,7 @@ export default function App() {
         currentReport: normalizeReport(result.report, profile.printSettings, activeSmartTemplate(profile))
       };
       await persistProfile(nextProfile);
-      setMessage("تم توليد التقرير عبر DeepSeek");
+      setMessage("تم توليد التقرير عبر الذكاء الاصطناعي");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر توليد التقرير");
     } finally {

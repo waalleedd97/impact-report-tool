@@ -1272,8 +1272,10 @@ function SummaryPage({
               {percent("effectiveness", "فعالية الأساليب المستخدمة", report.summary.effectivenessHighPercent)}
             </td>
           </tr>
-          <tr>
-            <th rowSpan={2}>{text("summary-head-benefits", "مجالات الاستفادة", labelDefaults)}</th>
+          <tr className="summary-benefits-head-row">
+            <th rowSpan={2} className="summary-benefits-label">
+              {text("summary-head-benefits", "مجالات الاستفادة", labelDefaults)}
+            </th>
             {columns.map((column) => (
               <th className="benefit-head" key={column.id}>
                 {text(`summary-benefit-label-${column.id}`, column.label, smallLabelDefaults)}
@@ -1281,7 +1283,7 @@ function SummaryPage({
             ))}
             {fillerSpan ? <th colSpan={fillerSpan} className="benefit-head" /> : null}
           </tr>
-          <tr>
+          <tr className="summary-benefits-percent-row">
             {columns.map((column) => (
               <td key={column.id}>
                 {percent(
@@ -1291,7 +1293,7 @@ function SummaryPage({
                 )}
               </td>
             ))}
-            {fillerSpan ? <td colSpan={fillerSpan} /> : null}
+            {fillerSpan ? <td colSpan={fillerSpan} className="summary-benefits-spacer" /> : null}
           </tr>
         </tbody>
       </table>
